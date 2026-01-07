@@ -1,0 +1,30 @@
+export interface FunnelData {
+    date_monday: string;
+    month_year: string | null;
+    week_number: number | null;
+    campaign_id: number;
+    campaign_name: string | null;
+    impressions: number | null;
+    clicks: number | null;
+    landing_page_views: number | null;
+    add_to_cart: number | null;
+    initiate_checkout: number | null;
+    add_payment_info: number | null;
+    purchases: number | null;
+    spend: number | null;
+    revenue: number | null;
+    cpm: number | null;
+    cpc: number | null;
+    cost_per_landing_view: number | null;
+    cac: number | null;
+    roas: number | null;
+    aov: number | null;
+    profit: number | null;
+    ctr: number | null;
+    click_to_landing_rate: number | null;
+    cvr_landing_to_atc: number | null;
+    cvr_atc_to_ic: number | null;
+    cvr_ic_to_payment: number | null;
+    cvr_payment_to_purchase: number | null;
+    cvr_global: number | null;
+}
