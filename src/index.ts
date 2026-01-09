@@ -107,6 +107,10 @@ app.get('*', async (c) => {
 // Helper to execute job and update KV with status
 async function executeJob(env: Env, job: SyncJobConfig) {
 	try {
+		if (!env.SUPABASE_URL) throw new Error('SUPABASE_URL is missing. Check your .dev.vars (local) or secrets (prod).');
+		if (!env.SUPABASE_SERVICE_KEY) throw new Error('SUPABASE_SERVICE_KEY is missing.');
+		if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is missing.');
+
 		await handleSync({
 			googleServiceAccount: env.GOOGLE_SERVICE_ACCOUNT_JSON,
 			supabaseUrl: env.SUPABASE_URL,

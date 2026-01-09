@@ -110,6 +110,7 @@ function renderJobs() {
             <div class="job-actions">
                 <button class="btn btn-ghost" onclick="syncJob('${job.id}')" id="sync-${job.id}">RUN</button>
                 <button class="btn btn-ghost" onclick="editJob('${job.id}')">EDIT</button>
+                <button class="btn btn-danger" onclick="deleteJob('${job.id}')">DELETE</button>
             </div>
         </div>
     `).join('');
@@ -179,6 +180,24 @@ async function syncJob(id) {
     } finally {
         btn.innerText = originalText;
         btn.disabled = false;
+    }
+}
+
+async function deleteJob(id) {
+    if (!confirm('ARE YOU SURE YOU WANT TO TERMINATE THIS SYNC JOB?')) return;
+
+    try {
+        const res = await fetch(`/api/configs/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${state.apiKey}` }
+        });
+        if (res.ok) {
+            fetchJobs();
+        } else {
+            alert('Failed to delete job');
+        }
+    } catch (err) {
+        alert('Network Error');
     }
 }
 
