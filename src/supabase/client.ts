@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js';
-import { FunnelData } from '../types/funnel';
 
 export class SupabaseClient {
     private client;
@@ -8,36 +7,33 @@ export class SupabaseClient {
         this.client = createClient(url, key);
     }
 
-    async upsertFunnelData(data: FunnelData[]) {
+    async upsertTableData(tableName: string, data: any[], onConflict: string) {
         if (data.length === 0) return;
 
         const { error } = await this.client
-            .from('vw_shm_funnel')
+            .from(tableName)
             .upsert(data, {
-                onConflict: 'date_monday,campaign_id',
-                ignoreDuplicates: false // Set to false to update if data changes, as requested "data nueva", but user also said "lo q ya hay mantenerlo ahi". 
-                // Actually, user said: "traer la data nueva, lo q ya hay mantenerlo ahi". 
-                // Usually in marketing data, "new data" means new records OR updates to recent days.
-                // I'll keep ignoreDuplicates: false to allow updates if a campaign's data changes for a date.
+                onConflict: onConflict,
+                ignoreDuplicates: false
             });
 
         if (error) {
-            throw new Error(`Supabase Error: ${error.message}`);
+            throw new Error(`Supabase Error (${tableName}): ${error.message}`);
         }
     }
 
-    async getLastSyncDate(): Promise<string | null> {
+    async getLastSyncDateFromTable(tableName: string, column: string): Promise<string | null> {
         const { data, error } = await this.client
-            .from('vw_shm_funnel')
-            .select('date_monday')
-            .order('date_monday', { ascending: false })
+            .from(tableName)
+            .select(column)
+            .order(column, { ascending: false })
             .limit(1)
             .single();
 
-        if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned"
-            throw new Error(`Supabase Query Error: ${error.message}`);
+        if (error && error.code !== 'PGRST116') {
+            throw new Error(`Supabase Query Error (${tableName}): ${error.message}`);
         }
 
-        return data?.date_monday || null;
+        return data ? data[column] : null;
     }
 }

@@ -1,45 +1,67 @@
 import { BigQueryClient } from '../bigquery/client';
 import { SupabaseClient } from '../supabase/client';
-import { FunnelData } from '../types/funnel';
 
-export interface SyncConfig {
+export interface SyncJobConfig {
+    id: string;
+    name: string;
+    enabled: boolean;
+
+    // BigQuery Source
+    bigquery: {
+        projectId: string;
+        datasetId: string;
+        tableOrView: string;
+        incrementalColumn?: string; // ej: "date_monday"
+    };
+
+    // Supabase Destination
+    supabase: {
+        tableName: string;
+        upsertColumns: string[]; // ej: ["date_monday", "campaign_id"]
+    };
+
+    // Execution (Stored in KV)
+    lastRun?: string;
+    lastStatus?: 'success' | 'error';
+    lastError?: string;
+}
+
+export interface GlobalAuth {
     googleServiceAccount: string;
-    googleProjectId: string;
     supabaseUrl: string;
     supabaseKey: string;
 }
 
-export async function handleSync(config: SyncConfig) {
-    const bq = new BigQueryClient(config.googleServiceAccount);
-    const sb = new SupabaseClient(config.supabaseUrl, config.supabaseKey);
+export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
+    const bq = new BigQueryClient(auth.googleServiceAccount);
+    const sb = new SupabaseClient(auth.supabaseUrl, auth.supabaseKey);
 
-    // 1. Get the last synced date from Supabase
-    const lastSyncDate = await sb.getLastSyncDate();
-    console.log(`Last sync date in Supabase: ${lastSyncDate || 'None'}`);
+    console.log(`Starting sync job: ${job.name} (${job.id})`);
+
+    // 1. Get the last synced date from Supabase table specified in job
+    // We need to modify SupabaseClient to accept table name
+    let lastSyncDate = null;
+    if (job.bigquery.incrementalColumn) {
+        lastSyncDate = await getTableLastSyncDate(sb, job.supabase.tableName, job.bigquery.incrementalColumn);
+    }
+
+    console.log(`Last sync date in Supabase [${job.supabase.tableName}]: ${lastSyncDate || 'None'}`);
 
     // 2. Build query
-    // We use date_monday to filter new data.
-    // We subtract 7 days to be safe in case of delayed reporting in BigQuery,
-    // since upsert handles duplicates.
     let filter = '';
-    if (lastSyncDate) {
-        // If we have a last sync date, we look for data from that date onwards.
-        // Using >= and the unique constraint (date_monday, campaign_id) 
-        // ensures we don't duplicate but we DO update existing records for that Monday
-        // if BigQuery has updated them (common in attribution windows).
-        filter = `WHERE date_monday >= '${lastSyncDate}'`;
+    if (lastSyncDate && job.bigquery.incrementalColumn) {
+        filter = `WHERE ${job.bigquery.incrementalColumn} >= '${lastSyncDate}'`;
     }
 
     const sql = `
     SELECT * 
-    FROM \`acf-ecomerce-database.shm_ebra.vw_shm_funnel\`
+    FROM \`${job.bigquery.projectId}.${job.bigquery.datasetId}.${job.bigquery.tableOrView}\`
     ${filter}
-    ORDER BY date_monday ASC
   `;
 
     // 3. Fetch from BigQuery
     console.log('Fetching data from BigQuery...');
-    const data = await bq.query<FunnelData>(config.googleProjectId, sql);
+    const data = await bq.query<any>(job.bigquery.projectId, sql);
     console.log(`Fetched ${data.length} records.`);
 
     if (data.length === 0) {
@@ -47,13 +69,20 @@ export async function handleSync(config: SyncConfig) {
         return;
     }
 
-    // 4. Batch upsert to Supabase (500 per batch)
+    // 4. Batch upsert to Supabase
     const batchSize = 500;
     for (let i = 0; i < data.length; i += batchSize) {
         const batch = data.slice(i, i + batchSize);
-        console.log(`Upserting batch ${Math.floor(i / batchSize) + 1}...`);
-        await sb.upsertFunnelData(batch);
+        console.log(`Upserting batch ${Math.floor(i / batchSize) + 1} to ${job.supabase.tableName}...`);
+        await sb.upsertTableData(job.supabase.tableName, batch, job.supabase.upsertColumns.join(','));
     }
 
-    console.log('Sync completed successfully.');
+    console.log(`Sync job ${job.name} completed successfully.`);
+}
+
+// Helper to support dynamic table names in Supabase
+async function getTableLastSyncDate(sb: SupabaseClient, tableName: string, column: string): Promise<string | null> {
+    // We'll need to update SupabaseClient or use it raw
+    // For now I'll assume we update SupabaseClient
+    return await sb.getLastSyncDateFromTable(tableName, column);
 }

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACF | Data Operations Console</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Login View -->
+        <div id="login-view" class="login-container stagger-in">
+            <div class="logo-section" style="text-align: center; margin-bottom: 24px;">
+                <h1 class="uppercase">Data Ops</h1>
+                <span>SYSTEM VERSION 2.0.1</span>
+            </div>
+            <div class="terminal-box">
+                <p class="mono" style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 16px;">SECURE ACCESS PROTOCOL REQUIRED</p>
+                <div class="form-group">
+                    <label class="uppercase">Enter Master Key</label>
+                    <input type="password" id="api-key-input" class="input-field" placeholder="••••••••••••••••">
+                </div>
+                <button id="login-btn" class="btn" style="width: 100%; justify-content: center; margin-top: 16px;">
+                    INITIALIZE SESSION
+                </button>
+                <p id="login-error" class="hidden mono" style="color: var(--error); font-size: 0.75rem; margin-top: 16px; text-align: center;">ACCESS DENIED: INVALID KEY</p>
+            </div>
+        </div>
+
+        <!-- Dashboard View -->
+        <div id="dashboard-view" class="hidden stagger-in">
+            <header class="header">
+                <div class="logo-section">
+                    <h1 class="uppercase">Console</h1>
+                    <span>SYNC OPS / MULTI-INSTANCE</span>
+                </div>
+                <div class="header-actions">
+                    <button id="create-btn" class="btn">
+                        + NEW SYNC JOB
+                    </button>
+                    <button id="logout-btn" class="btn btn-ghost" style="margin-left: 12px;">
+                        EXIT
+                    </button>
+                </div>
+            </header>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h4>ACTIVE JOBS</h4>
+                    <div class="value" id="stat-active">0</div>
+                </div>
+                <div class="stat-card">
+                    <h4>TOTAL SYNCED</h4>
+                    <div class="value" id="stat-total">0</div>
+                </div>
+                <div class="stat-card">
+                    <h4>SYSTEM STATUS</h4>
+                    <div class="value" style="color: var(--success);">ONLINE</div>
+                </div>
+            </div>
+
+            <div class="jobs-list" id="jobs-container">
+                <!-- Jobs populated here -->
+                <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 40px;">SCANNING FOR JOBS...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Create/Edit -->
+    <div id="job-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h2 id="modal-title" class="uppercase">Configure Sync Job</h2>
+            <form id="job-form">
+                <input type="hidden" id="job-id">
+                
+                <div class="form-group">
+                    <label class="uppercase">Job Identification Name</label>
+                    <input type="text" id="job-name" class="input-field" required placeholder="Ex: Daily Ecom Funnel">
+                </div>
+
+                <div class="grid-cols-2">
+                    <div class="section-column">
+                        <p class="mono uppercase" style="font-size: 0.75rem; color: var(--accent-color); margin-bottom: 20px;">[ Source: BigQuery ]</p>
+                        <div class="form-group">
+                            <label>Project ID</label>
+                            <input type="text" id="bq-project" class="input-field" required value="acf-ecomerce-database">
+                        </div>
+                        <div class="form-group">
+                            <label>Dataset ID</label>
+                            <input type="text" id="bq-dataset" class="input-field" required placeholder="shm_ebra">
+                        </div>
+                        <div class="form-group">
+                            <label>Table / View Name</label>
+                            <input type="text" id="bq-table" class="input-field" required placeholder="vw_shm_funnel">
+                        </div>
+                        <div class="form-group">
+                            <label>Incremental Column (Optional)</label>
+                            <input type="text" id="bq-column" class="input-field" placeholder="date_monday">
+                        </div>
+                    </div>
+
+                    <div class="section-column">
+                        <p class="mono uppercase" style="font-size: 0.75rem; color: var(--accent-color); margin-bottom: 20px;">[ Target: Supabase ]</p>
+                        <div class="form-group">
+                            <label>Target Table Name</label>
+                            <input type="text" id="sb-table" class="input-field" required placeholder="vw_shm_funnel">
+                        </div>
+                        <div class="form-group">
+                            <label>Unique Columns (Comma separated)</label>
+                            <input type="text" id="sb-columns" class="input-field" required placeholder="date_monday,campaign_id">
+                        </div>
+                        <div class="form-group" style="margin-top: 32px;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" id="job-enabled" checked style="accent-color: var(--accent-color);">
+                                <span class="uppercase">Enable Auto-Sync</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="job-actions" style="margin-top: 40px; border-top: 1px solid var(--border-color); padding-top: 24px;">
+                    <button type="button" id="cancel-modal" class="btn btn-ghost">ABORT</button>
+                    <button type="submit" class="btn">SAVE CONFIGURATION</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

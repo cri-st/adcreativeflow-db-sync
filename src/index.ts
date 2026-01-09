@@ -1,56 +1,140 @@
-/**
- * Cloudflare Worker - BigQuery to Supabase Sync
- */
-
-import { handleSync } from './sync/handler';
+import { Hono } from 'hono';
+import { handleSync, SyncJobConfig } from './sync/handler';
 
 export interface Env {
-	// Secrets
 	GOOGLE_SERVICE_ACCOUNT_JSON: string;
 	GOOGLE_PROJECT_ID: string;
 	SUPABASE_URL: string;
 	SUPABASE_SERVICE_KEY: string;
 	SYNC_API_KEY: string;
+	SYNC_CONFIGS: KVNamespace;
+	ASSETS: Fetcher;
+}
+
+const app = new Hono<{ Bindings: Env }>();
+
+// --- MIDDLEWARE: Auth ---
+app.use('/api/*', async (c, next) => {
+	if (c.req.path === '/api/auth' && c.req.method === 'POST') {
+		return next();
+	}
+
+	const authHeader = c.req.header('Authorization');
+	if (!authHeader || authHeader !== `Bearer ${c.env.SYNC_API_KEY}`) {
+		return c.json({ error: 'Unauthorized' }, 401);
+	}
+	await next();
+});
+
+// --- API: Auth ---
+app.post('/api/auth', async (c) => {
+	const { key } = await c.req.json();
+	if (key === c.env.SYNC_API_KEY) {
+		return c.json({ success: true, token: c.env.SYNC_API_KEY });
+	}
+	return c.json({ success: false }, 401);
+});
+
+// --- API: Configs ---
+app.get('/api/configs', async (c) => {
+	const list = await c.env.SYNC_CONFIGS.list({ prefix: 'job:' });
+	const configs = await Promise.all(
+		list.keys.map(async (k) => {
+			const data = await c.env.SYNC_CONFIGS.get(k.name, 'json');
+			return data;
+		})
+	);
+	return c.json(configs);
+});
+
+app.post('/api/configs', async (c) => {
+	const job: SyncJobConfig = await c.req.json();
+	if (!job.id) job.id = crypto.randomUUID();
+	await c.env.SYNC_CONFIGS.put(`job:${job.id}`, JSON.stringify(job));
+	return c.json({ success: true, job });
+});
+
+app.put('/api/configs/:id', async (c) => {
+	const id = c.req.param('id');
+	const job: SyncJobConfig = await c.req.json();
+	await c.env.SYNC_CONFIGS.put(`job:${id}`, JSON.stringify(job));
+	return c.json({ success: true });
+});
+
+app.delete('/api/configs/:id', async (c) => {
+	const id = c.req.param('id');
+	await c.env.SYNC_CONFIGS.delete(`job:${id}`);
+	return c.json({ success: true });
+});
+
+// --- API: Sync Control ---
+app.post('/api/sync/:id', async (c) => {
+	const id = c.req.param('id');
+	const job = await c.env.SYNC_CONFIGS.get<SyncJobConfig>(`job:${id}`, 'json');
+	if (!job) return c.json({ error: 'Job not found' }, 404);
+
+	try {
+		await executeJob(c.env, job);
+		return c.json({ success: true });
+	} catch (err: any) {
+		return c.json({ error: err.message }, 500);
+	}
+});
+
+app.post('/api/sync/all', async (c) => {
+	const list = await c.env.SYNC_CONFIGS.list({ prefix: 'job:' });
+	const results = [];
+	for (const k of list.keys) {
+		const job = await c.env.SYNC_CONFIGS.get<SyncJobConfig>(k.name, 'json');
+		if (job && job.enabled) {
+			try {
+				await executeJob(c.env, job);
+				results.push({ id: job.id, status: 'success' });
+			} catch (err: any) {
+				results.push({ id: job.id, status: 'error', message: err.message });
+			}
+		}
+	}
+	return c.json(results);
+});
+
+// --- STATIC ASSETS ---
+app.get('*', async (c) => {
+	// Try to fetch from assets binding
+	return await c.env.ASSETS.fetch(c.req.raw);
+});
+
+// Helper to execute job and update KV with status
+async function executeJob(env: Env, job: SyncJobConfig) {
+	try {
+		await handleSync({
+			googleServiceAccount: env.GOOGLE_SERVICE_ACCOUNT_JSON,
+			supabaseUrl: env.SUPABASE_URL,
+			supabaseKey: env.SUPABASE_SERVICE_KEY
+		}, job);
+
+		job.lastRun = new Date().toISOString();
+		job.lastStatus = 'success';
+		delete job.lastError;
+		await env.SYNC_CONFIGS.put(`job:${job.id}`, JSON.stringify(job));
+	} catch (err: any) {
+		job.lastRun = new Date().toISOString();
+		job.lastStatus = 'error';
+		job.lastError = err.message;
+		await env.SYNC_CONFIGS.put(`job:${job.id}`, JSON.stringify(job));
+		throw err;
+	}
 }
 
 export default {
-	// This will run on the configured schedule
-	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-		ctx.waitUntil(
-			handleSync({
-				googleServiceAccount: env.GOOGLE_SERVICE_ACCOUNT_JSON,
-				googleProjectId: env.GOOGLE_PROJECT_ID,
-				supabaseUrl: env.SUPABASE_URL,
-				supabaseKey: env.SUPABASE_SERVICE_KEY,
-			})
-		);
-	},
-
-	// Security: Require POST and valid SYNC_API_KEY in Authorization header
-	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-		if (request.method !== 'POST') {
-			return new Response('Method Not Allowed. Use POST.', { status: 405 });
+	fetch: app.fetch,
+	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+		const list = await env.SYNC_CONFIGS.list({ prefix: 'job:' });
+		for (const k of list.keys) {
+			const job = await env.SYNC_CONFIGS.get<SyncJobConfig>(k.name, 'json');
+			if (job && job.enabled) {
+				ctx.waitUntil(executeJob(env, job));
+			}
 		}
-
-		const authHeader = request.headers.get('Authorization');
-		const expectedHeader = `Bearer ${env.SYNC_API_KEY}`;
-
-		if (!authHeader || authHeader !== expectedHeader) {
-			console.error('Unauthorized sync attempt');
-			return new Response('Unauthorized', { status: 401 });
-		}
-
-		try {
-			await handleSync({
-				googleServiceAccount: env.GOOGLE_SERVICE_ACCOUNT_JSON,
-				googleProjectId: env.GOOGLE_PROJECT_ID,
-				supabaseUrl: env.SUPABASE_URL,
-				supabaseKey: env.SUPABASE_SERVICE_KEY,
-			});
-			return new Response('Sync triggered successfully', { status: 200 });
-		} catch (err: any) {
-			console.error(`Sync failed: ${err.message}`);
-			return new Response(`Sync failed: ${err.message}`, { status: 500 });
-		}
-	},
+	}
 };
