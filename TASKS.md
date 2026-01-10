@@ -25,5 +25,5 @@
 ---
 
 ### Estado Actual:
-El Dashboard ya está desplegado en producción: `https://adcreativeflow-db-sync.crist-cloudflare.workers.dev`.
-Se ha verificado la conectividad local. El error de `supabaseUrl is required` es una indicación de que las variables en `.dev.vars` deben ser completadas para pruebas locales, pero el despliegue ya cuenta con los secretos necesarios en Cloudflare.
+El Dashboard ya está desplegado con soporte para **Dynamic Schema Sync**. El sistema ahora crea tablas automáticamente y añade columnas si el schema de BigQuery cambia.
+Es obligatorio configurar `SUPABASE_POSTGRES_URL` para que esta funcionalidad opere correctamente.

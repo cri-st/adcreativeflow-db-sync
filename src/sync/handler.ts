@@ -1,5 +1,6 @@
 import { BigQueryClient } from '../bigquery/client';
 import { SupabaseClient } from '../supabase/client';
+import { generateAddColumnSQL, generateCreateTableSQL, SchemaField } from './schema';
 
 export interface SyncJobConfig {
     id: string;
@@ -30,24 +31,46 @@ export interface GlobalAuth {
     googleServiceAccount: string;
     supabaseUrl: string;
     supabaseKey: string;
+    supabasePostgresUrl?: string;
 }
 
 export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
     const bq = new BigQueryClient(auth.googleServiceAccount);
-    const sb = new SupabaseClient(auth.supabaseUrl, auth.supabaseKey);
+    const sb = new SupabaseClient(auth.supabaseUrl, auth.supabaseKey, auth.supabasePostgresUrl);
 
     console.log(`Starting sync job: ${job.name} (${job.id})`);
 
-    // 1. Get the last synced date from Supabase table specified in job
-    // We need to modify SupabaseClient to accept table name
+    // --- PHASE 0: Schema Sync ---
+    console.log('Synchronizing schema...');
+    const bqMetadata = await bq.getTableMetadata(job.bigquery.projectId, job.bigquery.datasetId, job.bigquery.tableOrView);
+    const bqFields: SchemaField[] = bqMetadata.schema.fields;
+
+    const exists = await sb.tableExists(job.supabase.tableName);
+    if (!exists) {
+        console.log(`Table ${job.supabase.tableName} does not exist. Creating...`);
+        const createSql = generateCreateTableSQL(job.supabase.tableName, bqFields, job.supabase.upsertColumns);
+        await sb.executeRawSQL(createSql);
+    } else if (auth.supabasePostgresUrl) {
+        // If it exists and we have direct SQL access, ensure all columns exist
+        console.log(`Checking columns for ${job.supabase.tableName}...`);
+        const existingColumns = await sb.getTableColumns(job.supabase.tableName);
+        for (const field of bqFields) {
+            if (!existingColumns.includes(field.name)) {
+                console.log(`Adding missing column: ${field.name}`);
+                const addSql = generateAddColumnSQL(job.supabase.tableName, field);
+                await sb.executeRawSQL(addSql);
+            }
+        }
+    }
+
+    // --- PHASE 1: Data Sync ---
     let lastSyncDate = null;
     if (job.bigquery.incrementalColumn) {
-        lastSyncDate = await getTableLastSyncDate(sb, job.supabase.tableName, job.bigquery.incrementalColumn);
+        lastSyncDate = await sb.getLastSyncDateFromTable(job.supabase.tableName, job.bigquery.incrementalColumn);
     }
 
     console.log(`Last sync date in Supabase [${job.supabase.tableName}]: ${lastSyncDate || 'None'}`);
 
-    // 2. Build query
     let filter = '';
     if (lastSyncDate && job.bigquery.incrementalColumn) {
         filter = `WHERE ${job.bigquery.incrementalColumn} >= '${lastSyncDate}'`;
@@ -59,7 +82,6 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
     ${filter}
   `;
 
-    // 3. Fetch from BigQuery
     console.log('Fetching data from BigQuery...');
     const data = await bq.query<any>(job.bigquery.projectId, sql);
     console.log(`Fetched ${data.length} records.`);
@@ -69,7 +91,6 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
         return;
     }
 
-    // 4. Batch upsert to Supabase
     const batchSize = 500;
     for (let i = 0; i < data.length; i += batchSize) {
         const batch = data.slice(i, i + batchSize);
@@ -78,11 +99,4 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
     }
 
     console.log(`Sync job ${job.name} completed successfully.`);
-}
-
-// Helper to support dynamic table names in Supabase
-async function getTableLastSyncDate(sb: SupabaseClient, tableName: string, column: string): Promise<string | null> {
-    // We'll need to update SupabaseClient or use it raw
-    // For now I'll assume we update SupabaseClient
-    return await sb.getLastSyncDateFromTable(tableName, column);
 }

@@ -20,6 +20,10 @@ npx wrangler secret put SUPABASE_URL
 # Service Role Key de Supabase (OJO: no la anon key)
 npx wrangler secret put SUPABASE_SERVICE_KEY
 
+# URL de conexión directa a la DB (Transaction Pooler recomendado)
+# Formato: postgres://postgres.[USER]:[PASS]@[HOST]:6543/postgres
+npx wrangler secret put SUPABASE_POSTGRES_URL
+
 # Crea una clave aleatoria segura para tu endpoint (ej: un UUID o frase larga)
 npx wrangler secret put SYNC_API_KEY
 ```

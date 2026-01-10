@@ -93,4 +93,22 @@ export class BigQueryClient {
             return obj;
         });
     }
+
+    async getTableMetadata(projectId: string, datasetId: string, tableId: string): Promise<any> {
+        const token = await this.getAccessToken();
+        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`;
+
+        const response = await fetch(url, {
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+        });
+
+        const data: any = await response.json();
+        if (data.error) {
+            throw new Error(`BigQuery Metadata Error: ${data.error.message}`);
+        }
+
+        return data;
+    }
 }

@@ -7,6 +7,9 @@
 	"name": "adcreativeflow-db-sync",
 	"main": "src/index.ts",
 	"compatibility_date": "2024-04-19",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
 	"observability": {
 		"enabled": true
 	},
