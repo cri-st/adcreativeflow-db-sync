@@ -43,18 +43,4 @@ export class SupabaseClient {
             throw new Error(`Supabase DDL Error: ${error.message}. Ensure the 'exec_sql' RPC function exists in Supabase.`);
         }
     }
-
-    async tableExists(tableName: string): Promise<boolean> {
-        try {
-            const { error } = await this.client
-                .from(tableName)
-                .select('count')
-                .limit(0);
-
-            if (error && error.code === '42P01') return false;
-            return true;
-        } catch {
-            return false;
-        }
-    }
 }

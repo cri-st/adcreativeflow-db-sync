@@ -40,24 +40,17 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
     console.log(`Starting sync job: ${job.name} (${job.id})`);
 
     // --- PHASE 0: Schema Sync ---
-    console.log('Synchronizing schema...');
+    console.log('Ensuring table exists and schema is up to date...');
     const bqMetadata = await bq.getTableMetadata(job.bigquery.projectId, job.bigquery.datasetId, job.bigquery.tableOrView);
     const bqFields: SchemaField[] = bqMetadata.schema.fields;
 
-    const exists = await sb.tableExists(job.supabase.tableName);
-    if (!exists) {
-        console.log(`Table ${job.supabase.tableName} does not exist. Creating...`);
-        const createSql = generateCreateTableSQL(job.supabase.tableName, bqFields, job.supabase.upsertColumns);
-        await sb.executeRawSQL(createSql);
-    } else {
-        // Enfoque simplificado: no verificamos columnas en cada sync para ahorrar subrequests
-        // al menos que falle el primer batch, o podríamos hacerlo manual.
-        // Pero el plan decía consolidar ALTER TABLE. 
-        // Como eliminamos postgres.js y getTableColumns requería direct SQL, 
-        // delegamos el schema management a fallos o ejecuciones controladas, 
-        // o podemos intentar una query RPC para el schema.
-        console.log(`Table ${job.supabase.tableName} exists. Proceeding.`);
-    }
+    const createSql = generateCreateTableSQL(job.supabase.tableName, bqFields, job.supabase.upsertColumns);
+    await sb.executeRawSQL(createSql);
+
+    // Pequeño delay para dar tiempo a que PostgREST recargue el schema (pgrst reload)
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    console.log(`Schema synchronized for ${job.supabase.tableName}.`);
 
     // --- PHASE 1: Data Sync ---
     let lastSyncDate = null;
