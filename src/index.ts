@@ -6,7 +6,6 @@ export interface Env {
 	GOOGLE_PROJECT_ID: string;
 	SUPABASE_URL: string;
 	SUPABASE_SERVICE_KEY: string;
-	SUPABASE_POSTGRES_URL: string;
 	SYNC_API_KEY: string;
 	SYNC_CONFIGS: KVNamespace;
 	ASSETS: Fetcher;
@@ -115,8 +114,7 @@ async function executeJob(env: Env, job: SyncJobConfig) {
 		await handleSync({
 			googleServiceAccount: env.GOOGLE_SERVICE_ACCOUNT_JSON,
 			supabaseUrl: env.SUPABASE_URL,
-			supabaseKey: env.SUPABASE_SERVICE_KEY,
-			supabasePostgresUrl: env.SUPABASE_POSTGRES_URL
+			supabaseKey: env.SUPABASE_SERVICE_KEY
 		}, job);
 
 		job.lastRun = new Date().toISOString();

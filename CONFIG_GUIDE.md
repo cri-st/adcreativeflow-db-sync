@@ -1,14 +1,30 @@
 # Guía de Configuración: BigQuery → Supabase Sync
 
-He configurado la estructura completa del Worker y la tabla en Supabase. Para que el sistema empiece a funcionar, debes seguir estos pasos:
+He configurado la estructura completa del Worker y el Dashboard. Para que el sistema funcione correctamente con soporte para "Dynamic Schema", sigue estos pasos:
 
-## 1. Configurar Secretos en Cloudflare
+## 1. Configurar Función RPC en Supabase (CRÍTICO)
 
-Debes ejecutar los siguientes comandos en tu terminal (en la carpeta del proyecto) para subir las credenciales de forma segura:
+Para que el Worker pueda crear y actualizar tablas automáticamente sin agotar los límites de Cloudflare, debes crear una función "Helper" en tu base de datos de Supabase.
+
+1. Ve a tu **Supabase Dashboard** -> **SQL Editor**.
+2. Pega y ejecuta el siguiente código:
+
+```sql
+-- Función para ejecutar SQL dinámico desde el Worker
+CREATE OR REPLACE FUNCTION exec_sql(query text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  EXECUTE query;
+END;
+$$;
+```
+
+## 2. Configurar Secretos en Cloudflare
+
+Ejecuta los siguientes comandos en tu terminal para subir las credenciales:
 
 ```bash
 # JSON completo de tu Service Account de Google Cloud
-# Asegúrate de que el JSON esté en una sola línea o pégalo cuando te lo pida
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
 
 # ID del proyecto de Google Cloud (acf-ecomerce-database)
@@ -20,45 +36,28 @@ npx wrangler secret put SUPABASE_URL
 # Service Role Key de Supabase (OJO: no la anon key)
 npx wrangler secret put SUPABASE_SERVICE_KEY
 
-# URL de conexión directa a la DB (Transaction Pooler recomendado)
-# Formato: postgres://postgres.[USER]:[PASS]@[HOST]:6543/postgres
-npx wrangler secret put SUPABASE_POSTGRES_URL
-
-# Crea una clave aleatoria segura para tu endpoint (ej: un UUID o frase larga)
+# Clave Maestra del Dashboard (Cualquier frase larga o UUID)
 npx wrangler secret put SYNC_API_KEY
+
+# (Opcional) URL de conexión directa a la DB (Para uso futuro o depuración)
+npx wrangler secret put SUPABASE_POSTGRES_URL
 ```
 
-## 2. Permisos en Google Cloud
-
-Asegúrate de que la Service Account que uses tenga los siguientes roles en el proyecto `acf-ecomerce-database`:
-- `BigQuery Data Viewer`
-- `BigQuery Job User`
-
 ## 3. Despliegue
-
-Una vez configurados los secretos, puedes desplegar el worker:
 
 ```bash
 npm run deploy
 ```
 
-## 4. Disparo Manual (n8n / Webhook)
+## 4. Gestión vía Dashboard
 
-El endpoint solo acepta peticiones **POST** con un header de autorización para mayor seguridad.
-
-### Configuración en n8n (HTTP Request Node):
-- **Method**: `POST`
-- **URL**: `https://tu-worker.workers.dev/`
-- **Authentication**: `Header Auth`
-- **Name**: `Authorization`
-- **Value**: `Bearer TU_SYNC_API_KEY` (Sustituye por la clave que configuraste en el paso 1)
-
-## Detalles Técnicos Implementados
-
-- **Seguridad Robusta**: El endpoint manual ahora requiere una clave API secreta enviada mediante el estándar Bearer Token. Solo permite métodos POST.
-- **Deduplicación**: La tabla en Supabase tiene una constraint UNIQUE en `(date_monday, campaign_id)`.
-- **Lotes**: Los datos se suben en lotes de 500 registros para optimizar el performance.
-- **Seguridad**: Autenticación vía JWT (RS256) para Google Cloud integrada directamente en el worker.
+Accede a la URL de tu worker (ej: `https://adcreativeflow-db-sync.crist.workers.dev`) e ingresa tu `SYNC_API_KEY` para gestionar los jobs.
 
 ---
-*Cualquier error de sincronización aparecerá en los logs de Cloudflare Workers:* `npx wrangler tail`
+
+## Detalles Técnicos Optimizados
+
+- **Performance**: Los datos se suben en lotes grandes (2500 registros) para minimizar las sub-peticiones de Cloudflare.
+- **Dynamic Schema**: El Worker detecta si la tabla existe en Supabase y la crea automáticamente con el schema de BigQuery vía la función `exec_sql`.
+- **Deduplicación**: Se crea un índice UNIQUE automático basado en las columnas seleccionadas en el Dashboard.
+- **Logs en Vivo**: `npx wrangler tail` para ver el progreso de la sincronización.

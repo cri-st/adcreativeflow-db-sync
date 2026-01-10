@@ -1,18 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
-import postgres from 'postgres';
 
 export class SupabaseClient {
     private client;
-    private sql: postgres.Sql<{}> | null = null;
 
-    constructor(url: string, key: string, postgresUrl?: string) {
+    constructor(url: string, key: string) {
         this.client = createClient(url, key);
-        if (postgresUrl) {
-            this.sql = postgres(postgresUrl, {
-                ssl: 'require',
-                prepare: false // Necessary for connection pooling (Supabase)
-            });
-        }
     }
 
     async upsertTableData(tableName: string, data: any[], onConflict: string) {
@@ -27,32 +19,6 @@ export class SupabaseClient {
 
         if (error) {
             throw new Error(`Supabase Error (${tableName}): ${error.message}`);
-        }
-    }
-
-    async bulkUpsert(tableName: string, data: any[], upsertColumns: string[]) {
-        if (data.length === 0) return;
-        if (!this.sql) {
-            // Fallback to postgrest if no direct SQL connection
-            return await this.upsertTableData(tableName, data, upsertColumns.join(','));
-        }
-
-        const columns = Object.keys(data[0]);
-        const updateColumns = columns.filter(c => !upsertColumns.includes(c));
-
-        // Build DO UPDATE SET part
-        const setClause = updateColumns.length > 0
-            ? updateColumns.map(c => `"${c}" = EXCLUDED."${c}"`).join(', ')
-            : '"synced_at" = EXCLUDED."synced_at"';
-
-        try {
-            await this.sql`
-                INSERT INTO ${this.sql(tableName)} ${this.sql(data)}
-                ON CONFLICT (${this.sql(upsertColumns)})
-                DO UPDATE SET ${this.sql.unsafe(setClause)}
-            `;
-        } catch (err: any) {
-            throw new Error(`Supabase Bulk SQL Error (${tableName}): ${err.message}`);
         }
     }
 
@@ -72,15 +38,10 @@ export class SupabaseClient {
     }
 
     async executeRawSQL(query: string) {
-        if (!this.sql) {
-            // Fallback to RPC if postgresUrl is missing
-            const { error } = await this.client.rpc('exec_sql', { query });
-            if (error) {
-                throw new Error(`Supabase DDL Error: ${error.message}. Please provide SUPABASE_POSTGRES_URL or ensure exec_sql function exists.`);
-            }
-            return;
+        const { error } = await this.client.rpc('exec_sql', { query });
+        if (error) {
+            throw new Error(`Supabase DDL Error: ${error.message}. Ensure the 'exec_sql' RPC function exists in Supabase.`);
         }
-        return await this.sql.unsafe(query);
     }
 
     async tableExists(tableName: string): Promise<boolean> {
@@ -90,27 +51,10 @@ export class SupabaseClient {
                 .select('count')
                 .limit(0);
 
-            if (error && error.code === '42P01') return false; // Undefined table
+            if (error && error.code === '42P01') return false;
             return true;
         } catch {
             return false;
         }
-    }
-
-    async getTableColumns(tableName: string): Promise<string[]> {
-        if (!this.sql) {
-            // Fallback to information_schema via standard query if possible, 
-            // but information_schema is usually restricted in PostgREST.
-            // For now, let's assume we need direct SQL for this.
-            throw new Error('SUPABASE_POSTGRES_URL is required for schema inspection.');
-        }
-
-        const columns = await this.sql`
-          SELECT column_name 
-          FROM information_schema.columns 
-          WHERE table_name = ${tableName}
-          AND table_schema = 'public'
-      `;
-        return columns.map(c => c.column_name);
     }
 }
