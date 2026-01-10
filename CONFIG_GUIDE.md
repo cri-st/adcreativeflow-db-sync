@@ -1,63 +1,65 @@
 # Guía de Configuración: BigQuery → Supabase Sync
 
-He configurado la estructura completa del Worker y el Dashboard. Para que el sistema funcione correctamente con soporte para "Dynamic Schema", sigue estos pasos:
+He configurado el sistema para que sea resistente a los problemas de caché de Supabase. Para que el Worker funcione correctamente, se requieren dos funciones auxiliares en tu base de datos.
 
-## 1. Configurar Función RPC en Supabase (CRÍTICO)
+## 1. Configurar Funciones RPC en Supabase (OBLIGATORIO)
 
-Para que el Worker pueda crear y actualizar tablas automáticamente sin agotar los límites de Cloudflare, debes crear una función "Helper" en tu base de datos de Supabase.
+Ve a tu **Supabase Dashboard** -> **SQL Editor** y ejecuta estas dos consultas:
 
-1. Ve a tu **Supabase Dashboard** -> **SQL Editor**.
-2. Pega y ejecuta el siguiente código:
-
+### A. Función para DDL (Crear/Modificar Tablas)
 ```sql
--- Función para ejecutar SQL dinámico desde el Worker
 CREATE OR REPLACE FUNCTION exec_sql(query text)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
   EXECUTE query;
+  -- Notifica a PostgREST para intentar recargar el schema en background
+  NOTIFY pgrst, 'reload schema';
 END;
 $$;
 ```
 
-## 2. Configurar Secretos en Cloudflare
-
-Ejecuta los siguientes comandos en tu terminal para subir las credenciales:
-
-```bash
-# JSON completo de tu Service Account de Google Cloud
-npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
-
-# ID del proyecto de Google Cloud (acf-ecomerce-database)
-npx wrangler secret put GOOGLE_PROJECT_ID
-
-# URL de tu proyecto Supabase (ej: https://xyz.supabase.co)
-npx wrangler secret put SUPABASE_URL
-
-# Service Role Key de Supabase (OJO: no la anon key)
-npx wrangler secret put SUPABASE_SERVICE_KEY
-
-# Clave Maestra del Dashboard (Cualquier frase larga o UUID)
-npx wrangler secret put SYNC_API_KEY
-
-# (Opcional) URL de conexión directa a la DB (Para uso futuro o depuración)
-npx wrangler secret put SUPABASE_POSTGRES_URL
+### B. Función para Consultas Dinámicas (Bypass de Caché)
+```sql
+CREATE OR REPLACE FUNCTION exec_sql_query(query text)
+RETURNS json LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE result json;
+BEGIN
+  EXECUTE 'SELECT json_agg(t) FROM (' || query || ') t' INTO result;
+  RETURN COALESCE(result, '[]'::json);
+END;
+$$;
 ```
-
-## 3. Despliegue
-
-```bash
-npm run deploy
-```
-
-## 4. Gestión vía Dashboard
-
-Accede a la URL de tu worker (ej: `https://adcreativeflow-db-sync.crist.workers.dev`) e ingresa tu `SYNC_API_KEY` para gestionar los jobs.
 
 ---
 
-## Detalles Técnicos Optimizados
+## 2. Configurar Secretos en Cloudflare
 
-- **Performance**: Los datos se suben en lotes grandes (2500 registros) para minimizar las sub-peticiones de Cloudflare.
-- **Dynamic Schema**: El Worker detecta si la tabla existe en Supabase y la crea automáticamente con el schema de BigQuery vía la función `exec_sql`.
-- **Deduplicación**: Se crea un índice UNIQUE automático basado en las columnas seleccionadas en el Dashboard.
-- **Logs en Vivo**: `npx wrangler tail` para ver el progreso de la sincronización.
+Ejecuta estos comandos en tu terminal local:
+
+```bash
+# JSON de Service Account de Google
+npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
+
+# ID del Proyecto (acf-ecomerce-database)
+npx wrangler secret put GOOGLE_PROJECT_ID
+
+# Credenciales de Supabase
+npx wrangler secret put SUPABASE_URL
+npx wrangler secret put SUPABASE_SERVICE_KEY
+
+# Clave de acceso al Dashboard
+npx wrangler secret put SYNC_API_KEY
+```
+
+---
+
+## 3. Despliegue y Uso
+
+1. **Desplegar**: `npm run deploy`
+2. **Dashboard**: Entra a la URL de tu Worker y usa la `SYNC_API_KEY` para configurar tus sincronizaciones.
+3. **Logs**: Si algo falla, mira los logs en tiempo real con `npx wrangler tail`.
+
+## Características del Sistema
+- **Sin Dependencias Pesadas**: Eliminamos `postgres.js` para evitar límites de sub-peticiones de Cloudflare.
+- **Bypass de Caché**: Las verificaciones de schema y fecha usan SQL directo vía RPC para evitar el error "Table not found in schema cache".
+- **Performance**: Carga masiva en batches de 2500 registros.

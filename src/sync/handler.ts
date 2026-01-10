@@ -37,28 +37,33 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
     const bq = new BigQueryClient(auth.googleServiceAccount);
     const sb = new SupabaseClient(auth.supabaseUrl, auth.supabaseKey);
 
-    console.log(`Starting sync job: ${job.name} (${job.id})`);
+    console.log(`[SYNC START] Job: ${job.name} (${job.id})`);
 
     // --- PHASE 0: Schema Sync ---
-    console.log('Ensuring table exists and schema is up to date...');
+    console.log(`[PHASE 0] Fetching BigQuery metadata for ${job.bigquery.tableOrView}...`);
     const bqMetadata = await bq.getTableMetadata(job.bigquery.projectId, job.bigquery.datasetId, job.bigquery.tableOrView);
     const bqFields: SchemaField[] = bqMetadata.schema.fields;
 
+    console.log(`[PHASE 0] Ensuring table ${job.supabase.tableName} exists...`);
     const createSql = generateCreateTableSQL(job.supabase.tableName, bqFields, job.supabase.upsertColumns);
     await sb.executeRawSQL(createSql);
 
-    // Pequeño delay para dar tiempo a que PostgREST recargue el schema (pgrst reload)
-    await new Promise(resolve => setTimeout(resolve, 800));
-
-    console.log(`Schema synchronized for ${job.supabase.tableName}.`);
+    // Delay preventivo para propagación de cambios en DB
+    console.log(`[PHASE 0] DDL Executed. Waiting 1000ms for stability...`);
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
     // --- PHASE 1: Data Sync ---
+    console.log(`[PHASE 1] Determining last sync date...`);
     let lastSyncDate = null;
     if (job.bigquery.incrementalColumn) {
-        lastSyncDate = await sb.getLastSyncDateFromTable(job.supabase.tableName, job.bigquery.incrementalColumn);
+        try {
+            lastSyncDate = await sb.getLastSyncDateFromTable(job.supabase.tableName, job.bigquery.incrementalColumn);
+        } catch (e: any) {
+            console.warn(`[PHASE 1] Could not fetch last sync date (table might be new): ${e.message}`);
+        }
     }
 
-    console.log(`Last sync date in Supabase [${job.supabase.tableName}]: ${lastSyncDate || 'None'}`);
+    console.log(`[PHASE 1] Last sync date: ${lastSyncDate || 'NONE'}`);
 
     let filter = '';
     if (lastSyncDate && job.bigquery.incrementalColumn) {
@@ -71,22 +76,23 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
     ${filter}
   `;
 
-    console.log('Fetching data from BigQuery...');
+    console.log('[PHASE 2] Fetching data from BigQuery...');
     const data = await bq.query<any>(job.bigquery.projectId, sql);
-    console.log(`Fetched ${data.length} records.`);
+    console.log(`[PHASE 2] Fetched ${data.length} records.`);
 
     if (data.length === 0) {
-        console.log('No new data to sync.');
+        console.log('[PHASE 2] No new data to sync.');
         return;
     }
 
-    // Aumentamos batchSize a 2000 para reducir subrequests drasticamente
+    // Usamos PostgREST para el UPSERT de datos (sigue siendo más rápido para batches)
+    // El bypass de PostgREST lo hacemos solo para DDL/Checks que fallaban por el cache.
     const batchSize = 2500;
     for (let i = 0; i < data.length; i += batchSize) {
         const batch = data.slice(i, i + batchSize);
-        console.log(`Upserting batch ${Math.floor(i / batchSize) + 1} (${batch.length} records) to ${job.supabase.tableName}...`);
+        console.log(`[PHASE 3] Upserting batch ${Math.floor(i / batchSize) + 1} (${batch.length} records)...`);
         await sb.upsertTableData(job.supabase.tableName, batch, job.supabase.upsertColumns.join(','));
     }
 
-    console.log(`Sync job ${job.name} completed successfully.`);
+    console.log(`[SYNC COMPLETE] Job: ${job.name} finished successfully.`);
 }

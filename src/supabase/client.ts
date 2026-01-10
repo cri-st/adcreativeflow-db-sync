@@ -23,24 +23,29 @@ export class SupabaseClient {
     }
 
     async getLastSyncDateFromTable(tableName: string, column: string): Promise<string | null> {
-        const { data, error } = await this.client
-            .from(tableName)
-            .select(column)
-            .order(column, { ascending: false })
-            .limit(1)
-            .single();
+        const query = `SELECT "${column}" FROM "${tableName}" ORDER BY "${column}" DESC LIMIT 1`;
+        const result = await this.executeQuery(query);
 
-        if (error && error.code !== 'PGRST116' && error.code !== '42P01') {
-            throw new Error(`Supabase Query Error (${tableName}): ${error.message}`);
+        if (result && result.length > 0) {
+            return (result[0] as any)[column];
         }
-
-        return data ? (data as any)[column] : null;
+        return null;
     }
 
     async executeRawSQL(query: string) {
         const { error } = await this.client.rpc('exec_sql', { query });
         if (error) {
-            throw new Error(`Supabase DDL Error: ${error.message}. Ensure the 'exec_sql' RPC function exists in Supabase.`);
+            throw new Error(`Supabase DDL Error: ${error.message}. Ensure 'exec_sql' exists.`);
         }
+    }
+
+    async executeQuery(query: string): Promise<any[]> {
+        const { data, error } = await this.client.rpc('exec_sql_query', { query });
+        if (error) {
+            // Manejar error de tabla no existente de forma amigable para el sync
+            if (error.message.includes('does not exist')) return [];
+            throw new Error(`Supabase Query Error: ${error.message}`);
+        }
+        return data || [];
     }
 }
