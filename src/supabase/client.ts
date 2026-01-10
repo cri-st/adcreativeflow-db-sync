@@ -30,6 +30,32 @@ export class SupabaseClient {
         }
     }
 
+    async bulkUpsert(tableName: string, data: any[], upsertColumns: string[]) {
+        if (data.length === 0) return;
+        if (!this.sql) {
+            // Fallback to postgrest if no direct SQL connection
+            return await this.upsertTableData(tableName, data, upsertColumns.join(','));
+        }
+
+        const columns = Object.keys(data[0]);
+        const updateColumns = columns.filter(c => !upsertColumns.includes(c));
+
+        // Build DO UPDATE SET part
+        const setClause = updateColumns.length > 0
+            ? updateColumns.map(c => `"${c}" = EXCLUDED."${c}"`).join(', ')
+            : '"synced_at" = EXCLUDED."synced_at"';
+
+        try {
+            await this.sql`
+                INSERT INTO ${this.sql(tableName)} ${this.sql(data)}
+                ON CONFLICT (${this.sql(upsertColumns)})
+                DO UPDATE SET ${this.sql.unsafe(setClause)}
+            `;
+        } catch (err: any) {
+            throw new Error(`Supabase Bulk SQL Error (${tableName}): ${err.message}`);
+        }
+    }
+
     async getLastSyncDateFromTable(tableName: string, column: string): Promise<string | null> {
         const { data, error } = await this.client
             .from(tableName)

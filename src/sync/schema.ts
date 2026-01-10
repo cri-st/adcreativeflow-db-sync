@@ -63,3 +63,12 @@ export function generateAddColumnSQL(tableName: string, field: SchemaField): str
     const pgType = mapBigQueryTypeToPostgres(field.type);
     return `ALTER TABLE "${tableName}" ADD COLUMN IF NOT EXISTS "${field.name}" ${pgType};`;
 }
+
+export function generateAddColumnsSQL(tableName: string, fields: SchemaField[]): string {
+    if (fields.length === 0) return '';
+    const additions = fields.map(f => {
+        const pgType = mapBigQueryTypeToPostgres(f.type);
+        return `ADD COLUMN IF NOT EXISTS "${f.name}" ${pgType}`;
+    });
+    return `ALTER TABLE "${tableName}" ${additions.join(',\n  ')};`;
+}

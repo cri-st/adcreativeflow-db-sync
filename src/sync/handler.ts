@@ -1,6 +1,6 @@
 import { BigQueryClient } from '../bigquery/client';
 import { SupabaseClient } from '../supabase/client';
-import { generateAddColumnSQL, generateCreateTableSQL, SchemaField } from './schema';
+import { generateAddColumnSQL, generateAddColumnsSQL, generateCreateTableSQL, SchemaField } from './schema';
 
 export interface SyncJobConfig {
     id: string;
@@ -51,15 +51,14 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
         const createSql = generateCreateTableSQL(job.supabase.tableName, bqFields, job.supabase.upsertColumns);
         await sb.executeRawSQL(createSql);
     } else if (auth.supabasePostgresUrl) {
-        // If it exists and we have direct SQL access, ensure all columns exist
         console.log(`Checking columns for ${job.supabase.tableName}...`);
         const existingColumns = await sb.getTableColumns(job.supabase.tableName);
-        for (const field of bqFields) {
-            if (!existingColumns.includes(field.name)) {
-                console.log(`Adding missing column: ${field.name}`);
-                const addSql = generateAddColumnSQL(job.supabase.tableName, field);
-                await sb.executeRawSQL(addSql);
-            }
+        const missingFields = bqFields.filter(f => !existingColumns.includes(f.name));
+
+        if (missingFields.length > 0) {
+            console.log(`Adding ${missingFields.length} missing columns: ${missingFields.map(f => f.name).join(', ')}`);
+            const addSql = generateAddColumnsSQL(job.supabase.tableName, missingFields);
+            await sb.executeRawSQL(addSql);
         }
     }
 
@@ -91,12 +90,8 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
         return;
     }
 
-    const batchSize = 500;
-    for (let i = 0; i < data.length; i += batchSize) {
-        const batch = data.slice(i, i + batchSize);
-        console.log(`Upserting batch ${Math.floor(i / batchSize) + 1} to ${job.supabase.tableName}...`);
-        await sb.upsertTableData(job.supabase.tableName, batch, job.supabase.upsertColumns.join(','));
-    }
+    console.log(`Upserting ${data.length} records to ${job.supabase.tableName} in bulk...`);
+    await sb.bulkUpsert(job.supabase.tableName, data, job.supabase.upsertColumns);
 
     console.log(`Sync job ${job.name} completed successfully.`);
 }
