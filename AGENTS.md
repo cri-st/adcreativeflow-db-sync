@@ -27,6 +27,8 @@ AdCreativeFlow DB Sync is a Cloudflare Worker that synchronizes data from Google
 <!-- SKILLS_TABLE_START -->
 | Skill | Description | Link |
 |-------|-------------|------|
+| cloudflare-workers | Cloudflare Workers patterns for adcreativeflow-db-sync | [cloudflare-workers](skills/cloudflare-workers/SKILL.md) |
+| skill-sync | Auto-sync skill metadata to AGENTS.md files | [skill-sync](skills/skill-sync/SKILL.md) |
 <!-- SKILLS_TABLE_END -->
 
 ### Auto-invoke Skills
@@ -36,6 +38,8 @@ When performing these actions, invoke the corresponding skill FIRST:
 <!-- AUTO_INVOKE_START -->
 | Action | Skill |
 |--------|-------|
+| Updating AGENTS.md Auto-invoke tables | skill-sync |
+| Adding new skills | skill-sync |
 <!-- AUTO_INVOKE_END -->
 
 ---

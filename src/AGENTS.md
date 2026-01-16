@@ -12,6 +12,10 @@
 <!-- AUTO_INVOKE_START -->
 | Action | Skill |
 |--------|-------|
+| Creating Worker handlers | cloudflare-workers |
+| Using KV namespace | cloudflare-workers |
+| Implementing scheduled triggers | cloudflare-workers |
+| Working with Hono in Workers | cloudflare-workers |
 <!-- AUTO_INVOKE_END -->
 
 ---
