@@ -173,8 +173,11 @@ dist
 .cursor/
 .github/copilot-instructions.md
 
-# Sisyphus drafts (ephemeral)
-.sisyphus/drafts/
+# Sisyphus (AI planning)
+.sisyphus/
+
+# macOS
+.DS_Store
 
 # Temp research directories
 prowler/
