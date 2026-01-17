@@ -56,6 +56,8 @@ interface SyncState {
     bqFields: SchemaField[];
     totalRows: number;
     startTime: number;
+    schemaSyncDone?: boolean;
+    lastCursor?: { [key: string]: any };
 }
 
 export async function handleSync(
@@ -77,6 +79,7 @@ export async function handleSync(
         let bqFields: SchemaField[] = [];
         let totalRows = 0;
         let startTime = Date.now();
+        let loadedCursor: { [key: string]: any } | undefined = undefined;
 
         if (batchNumber === 1) {
             logger.info('SYNC_START', 'Starting sync', { bigquery: job.bigquery, supabase: job.supabase });
@@ -128,7 +131,9 @@ export async function handleSync(
                 lastSyncDate, 
                 bqFields,
                 totalRows: 0,
-                startTime
+                startTime,
+                schemaSyncDone: true,
+                lastCursor: undefined
             }), { expirationTtl: 86400 });
         
         } else {
@@ -137,14 +142,19 @@ export async function handleSync(
             if (!state) {
                 throw new Error(`Sync state not found for runId ${runId} (batch ${batchNumber}). The run may have expired or failed.`);
             }
+            if (!state.schemaSyncDone) {
+                throw new Error(`Schema sync not completed for runId ${runId}. Cannot proceed with batch ${batchNumber}.`);
+            }
             lastSyncDate = state.lastSyncDate;
             bqFields = state.bqFields;
             totalRows = state.totalRows || 0;
             startTime = state.startTime || Date.now();
+            loadedCursor = state.lastCursor;
         }
 
         let filter = '';
         let orderBy = '';
+        const cursorColumn = job.bigquery.incrementalColumn || job.supabase.upsertColumns[0];
         
         if (job.bigquery.incrementalColumn) {
             if (lastSyncDate) {
@@ -161,7 +171,15 @@ export async function handleSync(
             }
         }
 
-        const BATCH_LIMIT = 10000;
+        if (batchNumber > 1 && loadedCursor && loadedCursor[cursorColumn] !== undefined) {
+            const cursorValue = loadedCursor[cursorColumn];
+            const cursorFilter = typeof cursorValue === 'string' 
+                ? `${cursorColumn} > '${cursorValue}'`
+                : `${cursorColumn} > ${cursorValue}`;
+            filter = filter ? `${filter} AND ${cursorFilter}` : `WHERE ${cursorFilter}`;
+        }
+
+        const BATCH_LIMIT = 5000;
         const offset = (batchNumber - 1) * BATCH_LIMIT;
 
         const sql = `
@@ -169,7 +187,7 @@ export async function handleSync(
             FROM \`${job.bigquery.projectId}.${job.bigquery.datasetId}.${job.bigquery.tableOrView}\`
             ${filter}
             ${orderBy}
-            LIMIT ${BATCH_LIMIT} OFFSET ${offset}
+            LIMIT ${BATCH_LIMIT}
         `;
 
         logger.info('DATA_FETCH', `Fetching batch ${batchNumber}`, { limit: BATCH_LIMIT, offset });
@@ -188,6 +206,12 @@ export async function handleSync(
                 logger.debug('UPSERT', `Upserting sub-batch ${Math.floor(j/UPSERT_BATCH_SIZE)+1}`, { count: upsertBatch.length });
                 await sb.upsertTableData(job.supabase.tableName, upsertBatch, job.supabase.upsertColumns.join(','));
             }
+        }
+
+        let lastCursor: { [key: string]: any } | undefined = undefined;
+        if (data.length > 0) {
+            const lastRow = data[data.length - 1];
+            lastCursor = { [cursorColumn]: lastRow[cursorColumn] };
         }
 
         totalRows += data.length;
@@ -223,7 +247,9 @@ export async function handleSync(
                 lastSyncDate, 
                 bqFields,
                 totalRows,
-                startTime
+                startTime,
+                schemaSyncDone: true,
+                lastCursor
             }), { expirationTtl: 86400 });
 
             logger.success('BATCH_COMPLETE', `Batch ${batchNumber} completed. Proceeding to next batch.`);
