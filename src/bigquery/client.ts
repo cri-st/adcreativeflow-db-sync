@@ -111,7 +111,7 @@ export class BigQueryClient {
             body: JSON.stringify({
                 query: sql,
                 useLegacySql: false,
-                maxResults: 5000,
+                maxResults: 10000,
             }),
         });
 
@@ -137,7 +137,7 @@ export class BigQueryClient {
 
         while (pageToken && pageToken !== '') {
             pageNumber++;
-            const pageUrl = `${baseUrl}/${jobId}?pageToken=${encodeURIComponent(pageToken)}&maxResults=5000`;
+            const pageUrl = `${baseUrl}/${jobId}?pageToken=${encodeURIComponent(pageToken)}&maxResults=10000`;
 
             const pageResponse = await fetch(pageUrl, {
                 headers: {
