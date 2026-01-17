@@ -119,22 +119,34 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
     ${filter}
   `;
 
-    console.log('[PHASE 2] Fetching data from BigQuery...');
-    const data = await bq.query<any>(job.bigquery.projectId, sql);
-    console.log(`[PHASE 2] Fetched ${data.length} records.`);
+    console.log('[PHASE 2] Fetching data from BigQuery (paginated)...');
+    const data = await bq.queryPaginated<any>(job.bigquery.projectId, sql);
+    console.log(`[PHASE 2] Fetched ${data.length} total records.`);
 
     if (data.length === 0) {
         console.log('[PHASE 2] No new data to sync.');
         return;
     }
 
-    // Usamos PostgREST para el UPSERT de datos (sigue siendo más rápido para batches)
-    // El bypass de PostgREST lo hacemos solo para DDL/Checks que fallaban por el cache.
-    const batchSize = 2500;
-    for (let i = 0; i < data.length; i += batchSize) {
-        const batch = data.slice(i, i + batchSize);
-        console.log(`[PHASE 3] Upserting batch ${Math.floor(i / batchSize) + 1} (${batch.length} records)...`);
-        await sb.upsertTableData(job.supabase.tableName, batch, job.supabase.upsertColumns.join(','));
+    // Hybrid batching: Process data in page-batch chunks for better memory management
+    // 5 pages * 5k rows = 25k rows per page-batch, then split into 2500-row upserts
+    console.log('[PHASE 3] Processing data in hybrid batches...');
+    const PAGES_PER_BATCH = 5; // 5 pages * 5k rows = 25k rows per batch
+    const ROWS_PER_PAGE = 5000;
+    const BATCH_SIZE = 2500; // Supabase upsert batch size
+    
+    for (let i = 0; i < data.length; i += (PAGES_PER_BATCH * ROWS_PER_PAGE)) {
+        const pageBatch = data.slice(i, i + (PAGES_PER_BATCH * ROWS_PER_PAGE));
+        console.log(`[PHASE 3] Processing page-batch with ${pageBatch.length} rows...`);
+        
+        // Upsert in smaller chunks to Supabase
+        for (let j = 0; j < pageBatch.length; j += BATCH_SIZE) {
+            const upsertBatch = pageBatch.slice(j, j + BATCH_SIZE);
+            console.log(`[PHASE 3] Upserting sub-batch ${Math.floor(j / BATCH_SIZE) + 1} (${upsertBatch.length} records)...`);
+            await sb.upsertTableData(job.supabase.tableName, upsertBatch, job.supabase.upsertColumns.join(','));
+        }
+        
+        console.log(`[PHASE 3] Page-batch ${Math.floor(i / (PAGES_PER_BATCH * ROWS_PER_PAGE)) + 1} completed.`);
     }
 
     console.log(`[SYNC COMPLETE] Job: ${job.name} finished successfully.`);
