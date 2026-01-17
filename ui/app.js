@@ -47,6 +47,26 @@ if (state.apiKey) {
     showDashboard();
 }
 
+function showToast(message, type = 'error', duration = 5000) {
+    const container = document.getElementById('toast-container');
+    const icons = { error: '❌', success: '✅', warning: '⚠️' };
+    
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.innerHTML = `
+        <span class="toast-icon">${icons[type] || icons.error}</span>
+        <span class="toast-message">${message}</span>
+        <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+    `;
+    
+    container.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.classList.add('toast-fade-out');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
 // --- Auth Functions ---
 async function login() {
     const key = apiKeyInput.value.trim();
@@ -242,7 +262,7 @@ async function saveJob(e) {
         jobModal.classList.add('hidden');
         fetchJobs();
     } catch (err) {
-        alert('Failed to save job configuration');
+        showToast('Failed to save job configuration');
     }
 }
 
@@ -264,11 +284,11 @@ async function syncJob(id) {
             fetchJobs();
         } else {
             const data = await res.json();
-            alert(`Sync Failed: ${data.error}`);
+            showToast(`Sync Failed: ${data.error}`);
             fetchJobs();
         }
     } catch (err) {
-        alert('Network Error during sync');
+        showToast('Network Error during sync');
     } finally {
         btn.innerText = originalText;
         btn.disabled = false;
@@ -286,10 +306,10 @@ async function deleteJob(id) {
         if (res.ok) {
             fetchJobs();
         } else {
-            alert('Failed to delete job');
+            showToast('Failed to delete job');
         }
     } catch (err) {
-        alert('Network Error');
+        showToast('Network Error');
     }
 }
 
