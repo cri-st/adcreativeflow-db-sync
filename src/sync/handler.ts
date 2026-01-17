@@ -158,7 +158,7 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig, runId: st
     logger.success('SYNC_COMPLETE', 'Job finished successfully', { totalRecords: data.length });
         await logger.endRun(kvNamespace, 'success');
     } catch (err: any) {
-        logger.error('SYNC_ERROR', 'Sync failed', { error: err.message, stack: err.stack?.substring(0, 500) });
+        await logger.errorSync('SYNC_ERROR', 'Sync failed', { error: err.message, stack: err.stack?.substring(0, 500) });
         await logger.endRun(kvNamespace, 'error');
         throw err;
     }

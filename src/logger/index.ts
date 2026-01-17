@@ -135,6 +135,42 @@ export class Logger {
     this.log('ERROR', phase, message, metadata);
   }
 
+  /**
+   * Awaitable error logging for critical errors that MUST be persisted before continuing.
+   * Use this in catch blocks where you need to ensure the error is written to KV.
+   */
+  async errorSync(phase: string, message: string, metadata?: Record<string, unknown>): Promise<void> {
+    if (!this.kv) {
+      console.error('Logger: KV not initialized. Call startRun() first.');
+      return;
+    }
+
+    const entry = this.createEntry('ERROR', phase, message, this.sanitize(metadata));
+
+    if (this.logCount >= 500) {
+      console.warn('Log limit reached (500), subsequent logs in-memory only');
+      const emoji = this.getLevelEmoji(entry.level);
+      console.log(`${emoji} [${entry.timestamp}] [${this.jobName}] [${phase}] ${message}`);
+      this.logs.push(entry);
+      return;
+    }
+
+    const paddedTs = Date.now().toString().padStart(16, '0');
+    const key = `logs:${entry.jobId}:${entry.runId}:${paddedTs}`;
+
+    try {
+      await this.kv.put(key, JSON.stringify(entry), { expirationTtl: 86400 });
+    } catch (err) {
+      console.error('Critical error log write failed:', err);
+    }
+
+    const emoji = this.getLevelEmoji(entry.level);
+    console.log(`${emoji} [${entry.timestamp}] [${this.jobName}] [${phase}] ${message}`);
+
+    this.logs.push(entry);
+    this.logCount++;
+  }
+
   debug(phase: string, message: string, metadata?: Record<string, unknown>): void {
     this.log('DEBUG', phase, message, metadata);
   }

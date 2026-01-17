@@ -284,10 +284,33 @@ async function syncJob(id) {
             fetchJobs();
         } else {
             const data = await res.json();
+            
+            state.logs.push({
+                timestamp: new Date().toISOString(),
+                level: 'ERROR',
+                jobId: id,
+                jobName: job?.name || id,
+                runId: 'frontend-error',
+                phase: 'SYNC_ERROR',
+                message: data.error || 'Sync failed'
+            });
+            renderLogs();
+            
             showToast(`Sync Failed: ${data.error}`);
             fetchJobs();
         }
     } catch (err) {
+        state.logs.push({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            jobId: id,
+            jobName: job?.name || id,
+            runId: 'frontend-error',
+            phase: 'NETWORK_ERROR',
+            message: 'Network error during sync request'
+        });
+        renderLogs();
+        
         showToast('Network Error during sync');
     } finally {
         btn.innerText = originalText;
