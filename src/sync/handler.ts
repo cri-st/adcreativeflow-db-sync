@@ -217,6 +217,17 @@ export async function handleSync(
         totalRows += data.length;
         const hasMore = data.length === BATCH_LIMIT;
 
+        // DIAGNOSTIC: Log continuation decision
+        console.log(`[CONTINUATION_DECISION] Batch ${batchNumber} complete:`, {
+            dataFetched: data.length,
+            batchLimit: BATCH_LIMIT,
+            hasMore,
+            nextBatch: batchNumber + 1,
+            totalRowsSoFar: totalRows,
+            cursorColumn,
+            lastCursorValue: lastCursor?.[cursorColumn]
+        });
+
         if (!hasMore) {
             const durationMs = Date.now() - startTime;
             const minutes = Math.floor(durationMs / 60000);
