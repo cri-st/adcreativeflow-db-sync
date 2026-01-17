@@ -4,6 +4,8 @@ import {
     SchemaChanges,
     detectSchemaChanges,
     generateDropColumnsSQL,
+    validateUpsertColumns,
+    buildUpsertValidationError,
 } from './schema';
 
 describe('detectSchemaChanges', () => {
@@ -153,5 +155,94 @@ describe('generateDropColumnsSQL', () => {
     it('should quote table and column names properly', () => {
         const result = generateDropColumnsSQL('user-data', ['my-column']);
         expect(result).toBe('ALTER TABLE "user-data" DROP COLUMN IF EXISTS "my-column";');
+    });
+});
+
+describe('validateUpsertColumns', () => {
+    it('should return valid true when all columns exist', () => {
+        const upsertColumns = ['id', 'email'];
+        const bqFields: SchemaField[] = [
+            { name: 'id', type: 'INTEGER' },
+            { name: 'email', type: 'STRING' },
+            { name: 'name', type: 'STRING' },
+        ];
+
+        const result = validateUpsertColumns(upsertColumns, bqFields);
+
+        expect(result.valid).toBe(true);
+        expect(result.invalidColumns).toEqual([]);
+    });
+
+    it('should return valid false when all columns are invalid', () => {
+        const upsertColumns = ['foo', 'bar'];
+        const bqFields: SchemaField[] = [
+            { name: 'id', type: 'INTEGER' },
+            { name: 'email', type: 'STRING' },
+        ];
+
+        const result = validateUpsertColumns(upsertColumns, bqFields);
+
+        expect(result.valid).toBe(false);
+        expect(result.invalidColumns).toEqual(['foo', 'bar']);
+    });
+
+    it('should return invalid columns when mixed valid/invalid', () => {
+        const upsertColumns = ['id', 'nonexistent', 'email'];
+        const bqFields: SchemaField[] = [
+            { name: 'id', type: 'INTEGER' },
+            { name: 'email', type: 'STRING' },
+        ];
+
+        const result = validateUpsertColumns(upsertColumns, bqFields);
+
+        expect(result.valid).toBe(false);
+        expect(result.invalidColumns).toEqual(['nonexistent']);
+    });
+
+    it('should perform case-insensitive matching', () => {
+        const upsertColumns = ['ID', 'Email'];
+        const bqFields: SchemaField[] = [
+            { name: 'id', type: 'INTEGER' },
+            { name: 'email', type: 'STRING' },
+        ];
+
+        const result = validateUpsertColumns(upsertColumns, bqFields);
+
+        expect(result.valid).toBe(true);
+        expect(result.invalidColumns).toEqual([]);
+    });
+
+    it('should return valid true for empty upsertColumns array', () => {
+        const upsertColumns: string[] = [];
+        const bqFields: SchemaField[] = [
+            { name: 'id', type: 'INTEGER' },
+        ];
+
+        const result = validateUpsertColumns(upsertColumns, bqFields);
+
+        expect(result.valid).toBe(true);
+        expect(result.invalidColumns).toEqual([]);
+    });
+
+    it('should handle empty bqFields array', () => {
+        const upsertColumns = ['id', 'email'];
+        const bqFields: SchemaField[] = [];
+
+        const result = validateUpsertColumns(upsertColumns, bqFields);
+
+        expect(result.valid).toBe(false);
+        expect(result.invalidColumns).toEqual(['id', 'email']);
+    });
+});
+
+describe('buildUpsertValidationError', () => {
+    it('should build error message for single invalid column', () => {
+        const result = buildUpsertValidationError(['foo']);
+        expect(result).toBe('Upsert columns not found in BigQuery schema: foo. Check your sync configuration.');
+    });
+
+    it('should build error message for multiple invalid columns', () => {
+        const result = buildUpsertValidationError(['foo', 'bar', 'baz']);
+        expect(result).toBe('Upsert columns not found in BigQuery schema: foo, bar, baz. Check your sync configuration.');
     });
 });

@@ -102,3 +102,25 @@ export function generateDropColumnsSQL(tableName: string, columnNames: string[])
     const drops = columnNames.map(col => `DROP COLUMN IF EXISTS "${col}"`);
     return `ALTER TABLE "${tableName}" ${drops.join(', ')};`;
 }
+
+export interface UpsertValidationResult {
+    valid: boolean;
+    invalidColumns: string[];
+}
+
+export function validateUpsertColumns(upsertColumns: string[], bqFields: SchemaField[]): UpsertValidationResult {
+    const invalidColumns = upsertColumns.filter(col =>
+        !bqFields.some(field =>
+            field.name.toLowerCase() === col.toLowerCase()
+        )
+    );
+
+    return {
+        valid: invalidColumns.length === 0,
+        invalidColumns
+    };
+}
+
+export function buildUpsertValidationError(invalidColumns: string[]): string {
+    return `Upsert columns not found in BigQuery schema: ${invalidColumns.join(', ')}. Check your sync configuration.`;
+}
