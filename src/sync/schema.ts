@@ -4,6 +4,30 @@ export interface SchemaField {
     mode?: string;
 }
 
+export interface SchemaChanges {
+    columnsToAdd: SchemaField[];
+    columnsToDrop: string[];
+}
+
+export function detectSchemaChanges(bqFields: SchemaField[], supabaseFields: SchemaField[]): SchemaChanges {
+    const columnsToAdd = bqFields.filter(bq =>
+        !supabaseFields.some(sb =>
+            sb.name.toLowerCase() === bq.name.toLowerCase()
+        )
+    );
+
+    const columnsToDrop = supabaseFields
+        .filter(sb => sb.name.toLowerCase() !== 'synced_at')
+        .filter(sb =>
+            !bqFields.some(bq =>
+                bq.name.toLowerCase() === sb.name.toLowerCase()
+            )
+        )
+        .map(sb => sb.name);
+
+    return { columnsToAdd, columnsToDrop };
+}
+
 export function mapBigQueryTypeToPostgres(bqType: string): string {
     switch (bqType) {
         case 'STRING':
@@ -71,4 +95,10 @@ export function generateAddColumnsSQL(tableName: string, fields: SchemaField[]):
         return `ADD COLUMN IF NOT EXISTS "${f.name}" ${pgType}`;
     });
     return `ALTER TABLE "${tableName}" ${additions.join(',\n  ')};`;
+}
+
+export function generateDropColumnsSQL(tableName: string, columnNames: string[]): string {
+    if (columnNames.length === 0) return '';
+    const drops = columnNames.map(col => `DROP COLUMN IF EXISTS "${col}"`);
+    return `ALTER TABLE "${tableName}" ${drops.join(', ')};`;
 }
