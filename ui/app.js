@@ -455,7 +455,20 @@ async function fetchLogs(jobId) {
         }
         state.lastLogCount = newLogCount;
         
-        state.logs = data.logs || [];
+        const pendingFrontendErrors = state.logs.filter(log => log.runId === 'frontend-error');
+        const backendLogs = data.logs || [];
+        
+        const mergedLogs = [...backendLogs];
+        for (const pendingError of pendingFrontendErrors) {
+            const alreadyPersisted = mergedLogs.some(
+                log => log.timestamp === pendingError.timestamp && log.phase === pendingError.phase
+            );
+            if (!alreadyPersisted) {
+                mergedLogs.push(pendingError);
+            }
+        }
+        
+        state.logs = mergedLogs;
         renderLogs();
         updateLogStats();
         
