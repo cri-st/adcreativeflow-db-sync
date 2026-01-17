@@ -2,7 +2,7 @@ const state = {
     apiKey: localStorage.getItem('sync_key') || '',
     jobs: [],
     logs: [],
-    jobLogs: {},  // { [jobId]: LogEntry[] }
+    jobLogs: {},
     logPollingInterval: null,
     currentLogJobId: null,
     currentLogJobName: null,
@@ -15,7 +15,6 @@ const state = {
     stablePolls: 0,
 };
 
-// --- DOM Elements ---
 const loginView = document.getElementById('login-view');
 const dashboardView = document.getElementById('dashboard-view');
 const apiKeyInput = document.getElementById('api-key-input');
@@ -42,7 +41,6 @@ const logDeletedBanner = document.getElementById('log-deleted-banner');
 const logErrorBanner = document.getElementById('log-error-banner');
 const logCompleteBanner = document.getElementById('log-complete-banner');
 
-// --- Initialization ---
 if (state.apiKey) {
     showDashboard();
 }
@@ -67,7 +65,6 @@ function showToast(message, type = 'error', duration = 5000) {
     }, duration);
 }
 
-// --- Auth Functions ---
 async function login() {
     const key = apiKeyInput.value.trim();
     if (!key) return;
@@ -110,7 +107,6 @@ function showDashboard() {
     fetchJobs();
 }
 
-// --- Job Functions ---
 async function fetchJobLogs(jobId) {
     try {
         const res = await fetch(`/api/logs/${jobId}?limit=3`, {
@@ -134,7 +130,6 @@ async function fetchJobs() {
         if (res.status === 401) return logout();
         state.jobs = await res.json();
 
-        // Fetch logs for each job
         await Promise.all(state.jobs.map(job => fetchJobLogs(job.id)));
 
         renderJobs();
@@ -150,7 +145,6 @@ function renderMiniLogs(jobId) {
         return '<div class="mini-log-no-activity">No recent activity</div>';
     }
     
-    // Sort by timestamp descending (newest first)
     const sortedLogs = [...logs].sort((a, b) => 
         new Date(b.timestamp) - new Date(a.timestamp)
     ).slice(0, 3);
@@ -208,6 +202,7 @@ function renderJobs() {
                 <div class="mono" style="font-size: 0.65rem; color: var(--text-secondary); margin-top: 4px;">
                     ${job.lastRun ? new Date(job.lastRun).toLocaleString() : 'NEVER RUN'}
                 </div>
+                ${job.lastSummary ? `<div class="mono" style="font-size: 0.65rem; color: var(--text-secondary); margin-top: 2px;">${job.lastSummary}</div>` : ''}
             </div>
             <div class="job-recent-logs">
                 <div class="job-recent-logs-title">
@@ -218,6 +213,7 @@ function renderJobs() {
             </div>
             <div class="job-actions">
                 <button class="btn btn-ghost" onclick="syncJob('${job.id}')" id="sync-${job.id}">RUN</button>
+                <button class="btn btn-ghost" onclick="viewLogs('${job.id}', '${job.name}')">VIEW LOGS</button>
                 <button class="btn btn-ghost" onclick="editJob('${job.id}')">EDIT</button>
                 <button class="btn btn-danger" onclick="deleteJob('${job.id}')">DELETE</button>
             </div>
@@ -358,6 +354,10 @@ function editJob(id) {
     document.getElementById('sb-columns').value = job.supabase.upsertColumns.join(', ');
 
     jobModal.classList.remove('hidden');
+}
+
+function viewLogs(jobId, jobName) {
+    openLogModal(jobId, jobName);
 }
 
 async function openLogModal(jobId, jobName) {
@@ -532,7 +532,7 @@ function renderLogs() {
                 <span class="log-entry-time">${time}</span>
                 <span class="log-entry-level">${log.level}</span>
                 <span class="log-entry-phase">[${log.phase}]</span>
-                <span class="log-entry-message">${log.message}</span>
+                <span class="log-entry-message">${log.message}${log.metadata ? ' ' + JSON.stringify(log.metadata) : ''}</span>
             </div>
         `;
     }).join('');
@@ -620,7 +620,6 @@ function downloadLogs() {
     URL.revokeObjectURL(url);
 }
 
-// --- Event Listeners ---
 loginBtn.addEventListener('click', login);
 apiKeyInput.addEventListener('keypress', (e) => e.key === 'Enter' && login());
 logoutBtn.addEventListener('click', logout);
