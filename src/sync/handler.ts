@@ -101,7 +101,16 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
 
     let filter = '';
     if (lastSyncDate && job.bigquery.incrementalColumn) {
-        filter = `WHERE ${job.bigquery.incrementalColumn} >= '${lastSyncDate}'`;
+        // Detect column type from BigQuery schema
+        const incrementalField = bqFields.find(
+            f => f.name.toLowerCase() === job.bigquery.incrementalColumn!.toLowerCase()
+        );
+        
+        // Use strict > for TIMESTAMP (millisecond precision), >= for DATE (day precision)
+        const operator = incrementalField?.type === 'TIMESTAMP' ? '>' : '>=';
+        filter = `WHERE ${job.bigquery.incrementalColumn} ${operator} '${lastSyncDate}'`;
+        
+        console.log(`[PHASE 1] Incremental filter: ${operator} (column type: ${incrementalField?.type || 'UNKNOWN'})`);
     }
 
     const sql = `
