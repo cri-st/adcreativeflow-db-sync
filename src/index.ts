@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { handleSync, SyncJobConfig } from './sync/handler';
+import { Logger, LogEntry } from './logger';
 
 export interface Env {
 	GOOGLE_SERVICE_ACCOUNT_JSON: string;
@@ -8,6 +9,7 @@ export interface Env {
 	SUPABASE_SERVICE_KEY: string;
 	SYNC_API_KEY: string;
 	SYNC_CONFIGS: KVNamespace;
+	SYNC_LOGS: KVNamespace;
 	ASSETS: Fetcher;
 }
 
@@ -67,6 +69,29 @@ app.delete('/api/configs/:id', async (c) => {
 	return c.json({ success: true });
 });
 
+// --- API: Logs ---
+app.get('/api/logs/:jobId', async (c) => {
+	const jobId = c.req.param('jobId');
+	const runId = c.req.query('runId');
+	const limit = parseInt(c.req.query('limit') || '500', 10);
+
+	const job = await c.env.SYNC_CONFIGS.get(`job:${jobId}`);
+	if (!job) {
+		return c.json({ exists: false, logs: [] });
+	}
+
+	const logs = await Logger.getRecentLogs(c.env.SYNC_LOGS, jobId, runId, limit);
+	return c.json({ exists: true, logs });
+});
+
+app.delete('/api/logs/:jobId', async (c) => {
+	const jobId = c.req.param('jobId');
+	const runId = c.req.query('runId');
+
+	const deleted = await Logger.clearLogs(c.env.SYNC_LOGS, jobId, runId);
+	return c.json({ success: true, deleted });
+});
+
 // --- API: Sync Control ---
 app.post('/api/sync/:id', async (c) => {
 	const id = c.req.param('id');
@@ -111,11 +136,12 @@ async function executeJob(env: Env, job: SyncJobConfig) {
 		if (!env.SUPABASE_SERVICE_KEY) throw new Error('SUPABASE_SERVICE_KEY is missing.');
 		if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is missing.');
 
+		const runId = crypto.randomUUID();
 		await handleSync({
 			googleServiceAccount: env.GOOGLE_SERVICE_ACCOUNT_JSON,
 			supabaseUrl: env.SUPABASE_URL,
 			supabaseKey: env.SUPABASE_SERVICE_KEY
-		}, job);
+		}, job, runId, env.SYNC_LOGS);
 
 		job.lastRun = new Date().toISOString();
 		job.lastStatus = 'success';

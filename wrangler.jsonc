@@ -22,6 +22,10 @@
 		{
 			"binding": "SYNC_CONFIGS",
 			"id": "c3434e39d5934d738c9575a7d44f497e"
+		},
+		{
+			"binding": "SYNC_LOGS",
+			"id": "6e7627e98699479790be33b8cd1c7ad3"
 		}
 	],
 	"assets": {

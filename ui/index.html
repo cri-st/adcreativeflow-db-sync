@@ -126,6 +126,58 @@
         </div>
     </div>
 
+    <div id="log-modal" class="modal-overlay hidden">
+        <div class="modal-content log-terminal">
+            <div class="log-header">
+                <div class="log-header-left">
+                    <h2 id="log-modal-title" class="uppercase mono">SYSTEM LOGS</h2>
+                    <span id="log-modal-subtitle" class="log-subtitle">JOB_ID</span>
+                </div>
+                <div class="log-header-right">
+                    <div class="log-filters">
+                        <button class="log-filter active" data-level="INFO">INFO</button>
+                        <button class="log-filter active" data-level="SUCCESS">SUCCESS</button>
+                        <button class="log-filter active" data-level="WARNING">WARNING</button>
+                        <button class="log-filter active" data-level="ERROR">ERROR</button>
+                        <button class="log-filter active" data-level="DEBUG">DEBUG</button>
+                    </div>
+                    <button id="log-modal-close" class="log-close-btn">&times;</button>
+                </div>
+            </div>
+            
+            <div class="log-body">
+                <div id="log-deleted-banner" class="log-deleted-banner hidden">
+                    ⚠️ JOB DELETED - These are the last available logs
+                </div>
+                <div id="log-error-banner" class="log-error-banner hidden">
+                    🔴 CONNECTION ERROR - Retrying...
+                </div>
+                <div id="log-complete-banner" class="log-complete-banner hidden">
+                    ✅ SYNC COMPLETED
+                </div>
+                <div id="log-entries" class="log-entries-container">
+                    <div class="log-empty-state">
+                        <span class="mono">AWAITING DATA STREAM...</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="log-footer">
+                <div class="log-stats">
+                    <span class="log-stat">TOTAL: <span id="log-stat-total">0</span></span>
+                    <span class="log-stat log-INFO">INFO: <span id="log-stat-info">0</span></span>
+                    <span class="log-stat log-SUCCESS">SUCCESS: <span id="log-stat-success">0</span></span>
+                    <span class="log-stat log-WARNING">WARN: <span id="log-stat-warning">0</span></span>
+                    <span class="log-stat log-ERROR">ERROR: <span id="log-stat-error">0</span></span>
+                </div>
+                <div class="log-actions">
+                    <button id="log-clear-btn" class="btn btn-ghost btn-sm">CLEAR LOGS</button>
+                    <button id="log-download-btn" class="btn btn-ghost btn-sm">DOWNLOAD</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>
