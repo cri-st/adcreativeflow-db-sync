@@ -2,6 +2,8 @@ const state = {
     apiKey: localStorage.getItem('sync_key') || '',
     jobs: [],
     logs: [],
+    runs: [],
+    currentRunId: null,
     jobLogs: {},
     logPollingInterval: null,
     currentLogJobId: null,
@@ -360,10 +362,60 @@ function viewLogs(jobId, jobName) {
     openLogModal(jobId, jobName);
 }
 
+function createRunSelector(runs, jobId) {
+    const existingSelector = document.getElementById('run-selector');
+    if (existingSelector) existingSelector.remove();
+    
+    if (!runs || runs.length === 0) return null;
+    
+    const select = document.createElement('select');
+    select.id = 'run-selector';
+    select.className = 'run-selector';
+    select.style.cssText = 'margin-bottom: 10px; padding: 8px; background: #1a1a2e; color: #0ff; border: 1px solid #0ff; border-radius: 4px; width: 100%;';
+    
+    runs.forEach((run, i) => {
+        const option = document.createElement('option');
+        option.value = run.runId;
+        const date = new Date(run.startedAt).toLocaleString();
+        const statusIcon = run.status === 'success' ? '✓' : run.status === 'error' ? '✗' : '⟳';
+        option.textContent = `${statusIcon} ${date} - ${run.status}`;
+        if (i === 0) option.selected = true;
+        select.appendChild(option);
+    });
+    
+    select.addEventListener('change', async (e) => {
+        state.currentRunId = e.target.value;
+        state.logs = [];
+        logEntries.innerHTML = '<div class="log-loading"></div>';
+        await fetchLogsForRun(jobId, e.target.value);
+    });
+    
+    return select;
+}
+
+async function fetchLogsForRun(jobId, runId) {
+    try {
+        const res = await fetch(`/api/logs/${jobId}?runId=${runId}`, {
+            headers: { 'Authorization': `Bearer ${state.apiKey}` }
+        });
+        
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        
+        const data = await res.json();
+        state.logs = data.logs || [];
+        renderLogs();
+        updateLogStats();
+    } catch (err) {
+        console.error('Failed to fetch logs for run:', err);
+    }
+}
+
 async function openLogModal(jobId, jobName) {
     state.currentLogJobId = jobId;
     state.currentLogJobName = jobName;
     state.logs = [];
+    state.runs = [];
+    state.currentRunId = null;
     state.isAutoScrollEnabled = true;
     state.retryCount = 0;
     state.jobDeleted = false;
@@ -375,6 +427,9 @@ async function openLogModal(jobId, jobName) {
     document.getElementById('log-error-banner')?.classList.add('hidden');
     document.getElementById('log-complete-banner')?.classList.add('hidden');
     
+    const existingSelector = document.getElementById('run-selector');
+    if (existingSelector) existingSelector.remove();
+    
     logClearBtn.disabled = false;
     
     logModalTitle.innerText = `SYSTEM LOGS`;
@@ -383,9 +438,47 @@ async function openLogModal(jobId, jobName) {
     logEntries.innerHTML = '<div class="log-loading"></div>';
     logModal.classList.remove('hidden');
     
-    await fetchLogs(jobId);
+    try {
+        const runsRes = await fetch(`/api/logs/${jobId}`, {
+            headers: { 'Authorization': `Bearer ${state.apiKey}` }
+        });
+        
+        if (runsRes.ok) {
+            const runsData = await runsRes.json();
+            
+            if (!runsData.exists) {
+                state.jobDeleted = true;
+                document.getElementById('log-deleted-banner')?.classList.remove('hidden');
+                logClearBtn.disabled = true;
+                return;
+            }
+            
+            state.runs = runsData.runs || [];
+            
+            if (state.runs.length > 0) {
+                const selector = createRunSelector(state.runs, jobId);
+                if (selector) {
+                    const logHeader = logModalSubtitle.parentElement;
+                    logHeader.insertAdjacentElement('afterend', selector);
+                }
+                state.currentRunId = state.runs[0].runId;
+                await fetchLogsForRun(jobId, state.currentRunId);
+            } else {
+                await fetchLogs(jobId);
+            }
+        }
+    } catch (err) {
+        console.error('Failed to fetch runs:', err);
+        await fetchLogs(jobId);
+    }
     
-    state.logPollingInterval = setInterval(() => fetchLogs(jobId), 2000);
+    state.logPollingInterval = setInterval(() => {
+        if (state.currentRunId) {
+            fetchLogsForRun(jobId, state.currentRunId);
+        } else {
+            fetchLogs(jobId);
+        }
+    }, 2000);
 }
 
 function closeLogModal() {
@@ -400,9 +493,14 @@ function closeLogModal() {
     document.getElementById('log-error-banner')?.classList.add('hidden');
     document.getElementById('log-complete-banner')?.classList.add('hidden');
     
+    const existingSelector = document.getElementById('run-selector');
+    if (existingSelector) existingSelector.remove();
+    
     state.currentLogJobId = null;
     state.currentLogJobName = null;
     state.logs = [];
+    state.runs = [];
+    state.currentRunId = null;
     state.retryCount = 0;
     state.jobDeleted = false;
     state.syncCompleted = false;
