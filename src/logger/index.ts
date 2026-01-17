@@ -13,8 +13,9 @@ export interface LogEntry {
 
 interface RunInfo {
   runId: string;
-  timestamp: string;
+  startedAt: string;
   status: 'running' | 'success' | 'error';
+  endedAt?: string;
 }
 
 export function truncateSql(sql: string, maxLen: number = 1000): string {
@@ -187,18 +188,28 @@ export class Logger {
       timestamp: new Date().toISOString()
     }), { expirationTtl: 86400 });
 
-    const runsKey = `logs:${this.jobId}:runs`;
-    const existingRuns = await kv.get<RunInfo[]>(runsKey, 'json') || [];
-    const newRun: RunInfo = { runId: this.runId, timestamp: new Date().toISOString(), status: 'running' };
-    const updatedRuns = [newRun, ...existingRuns].slice(0, 10);
-    await kv.put(runsKey, JSON.stringify(updatedRuns), { expirationTtl: 86400 });
+    // Add to jobRuns index
+    const indexKey = `jobRuns:${this.jobId}`;
+    const existingRuns = await kv.get<RunInfo[]>(indexKey, 'json') || [];
+    existingRuns.unshift({
+      runId: this.runId,
+      startedAt: new Date().toISOString(),
+      status: 'running'
+    });
+    // Keep last 50 runs
+    const trimmedRuns = existingRuns.slice(0, 50);
+    await kv.put(indexKey, JSON.stringify(trimmedRuns), { expirationTtl: 2592000 }); // 30 days
   }
 
   async endRun(kv: KVNamespace, status: 'success' | 'error'): Promise<void> {
-    const runsKey = `logs:${this.jobId}:runs`;
-    const runs = await kv.get<RunInfo[]>(runsKey, 'json') || [];
-    const updated = runs.map(r => r.runId === this.runId ? { ...r, status } : r);
-    await kv.put(runsKey, JSON.stringify(updated), { expirationTtl: 86400 });
+    const indexKey = `jobRuns:${this.jobId}`;
+    const runs = await kv.get<RunInfo[]>(indexKey, 'json') || [];
+    const runIndex = runs.findIndex(r => r.runId === this.runId);
+    if (runIndex >= 0) {
+      runs[runIndex].status = status;
+      runs[runIndex].endedAt = new Date().toISOString();
+      await kv.put(indexKey, JSON.stringify(runs), { expirationTtl: 2592000 });
+    }
   }
 
   static async getRecentLogs(
@@ -236,6 +247,14 @@ export class Logger {
       .slice(0, limit);
   }
 
+  static async getJobRuns(
+    kv: KVNamespace,
+    jobId: string
+  ): Promise<RunInfo[]> {
+    const indexKey = `jobRuns:${jobId}`;
+    return await kv.get<RunInfo[]>(indexKey, 'json') || [];
+  }
+
   static async clearLogs(
     kv: KVNamespace,
     jobId: string,
@@ -253,13 +272,13 @@ export class Logger {
     } while (cursor);
 
     if (runId) {
-      const runsKey = `logs:${jobId}:runs`;
-      const runs = await kv.get<RunInfo[]>(runsKey, 'json') || [];
+      const indexKey = `jobRuns:${jobId}`;
+      const runs = await kv.get<RunInfo[]>(indexKey, 'json') || [];
       const updated = runs.filter(r => r.runId !== runId);
       if (updated.length > 0) {
-        await kv.put(runsKey, JSON.stringify(updated), { expirationTtl: 86400 });
+        await kv.put(indexKey, JSON.stringify(updated), { expirationTtl: 2592000 });
       } else {
-        await kv.delete(runsKey);
+        await kv.delete(indexKey);
       }
 
       const latest = await kv.get<{ runId: string }>(`logs:${jobId}:latest`, 'json');
@@ -267,7 +286,7 @@ export class Logger {
         if (updated.length > 0) {
           await kv.put(`logs:${jobId}:latest`, JSON.stringify({
             runId: updated[0].runId,
-            timestamp: updated[0].timestamp
+            timestamp: updated[0].startedAt
           }), { expirationTtl: 86400 });
         } else {
           await kv.delete(`logs:${jobId}:latest`);
@@ -275,7 +294,7 @@ export class Logger {
       }
     } else {
       await kv.delete(`logs:${jobId}:latest`);
-      await kv.delete(`logs:${jobId}:runs`);
+      await kv.delete(`jobRuns:${jobId}`);
     }
 
     return deleted;

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import { handleSync, SyncJobConfig } from './sync/handler';
-import { Logger, LogEntry } from './logger';
+import { handleSync, SyncJobConfig, SyncResult } from './sync/handler';
+import { Logger } from './logger';
 
 export interface Env {
 	GOOGLE_SERVICE_ACCOUNT_JSON: string;
@@ -11,11 +11,11 @@ export interface Env {
 	SYNC_CONFIGS: KVNamespace;
 	SYNC_LOGS: KVNamespace;
 	ASSETS: Fetcher;
+	WORKER_URL?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
 
-// --- MIDDLEWARE: Auth ---
 app.use('/api/*', async (c, next) => {
 	if (c.req.path === '/api/auth' && c.req.method === 'POST') {
 		return next();
@@ -28,7 +28,6 @@ app.use('/api/*', async (c, next) => {
 	await next();
 });
 
-// --- API: Auth ---
 app.post('/api/auth', async (c) => {
 	const { key } = await c.req.json();
 	if (key === c.env.SYNC_API_KEY) {
@@ -37,7 +36,6 @@ app.post('/api/auth', async (c) => {
 	return c.json({ success: false }, 401);
 });
 
-// --- API: Configs ---
 app.get('/api/configs', async (c) => {
 	const list = await c.env.SYNC_CONFIGS.list({ prefix: 'job:' });
 	const configs = await Promise.all(
@@ -69,7 +67,6 @@ app.delete('/api/configs/:id', async (c) => {
 	return c.json({ success: true });
 });
 
-// --- API: Logs ---
 app.get('/api/logs/:jobId', async (c) => {
 	const jobId = c.req.param('jobId');
 	const runId = c.req.query('runId');
@@ -77,11 +74,16 @@ app.get('/api/logs/:jobId', async (c) => {
 
 	const job = await c.env.SYNC_CONFIGS.get(`job:${jobId}`);
 	if (!job) {
-		return c.json({ exists: false, logs: [] });
+		return c.json({ exists: false, logs: [], runs: [] });
+	}
+
+	if (!runId) {
+		const runs = await Logger.getJobRuns(c.env.SYNC_LOGS, jobId);
+		return c.json({ exists: true, logs: [], runs });
 	}
 
 	const logs = await Logger.getRecentLogs(c.env.SYNC_LOGS, jobId, runId, limit);
-	return c.json({ exists: true, logs });
+	return c.json({ exists: true, logs, runs: [] });
 });
 
 app.delete('/api/logs/:jobId', async (c) => {
@@ -92,15 +94,19 @@ app.delete('/api/logs/:jobId', async (c) => {
 	return c.json({ success: true, deleted });
 });
 
-// --- API: Sync Control ---
 app.post('/api/sync/:id', async (c) => {
 	const id = c.req.param('id');
+	const body = await c.req.json().catch(() => ({}));
+	const runId = body.runId;
+	const batchNumber = body.batchNumber || 1;
+
 	const job = await c.env.SYNC_CONFIGS.get<SyncJobConfig>(`job:${id}`, 'json');
 	if (!job) return c.json({ error: 'Job not found' }, 404);
 
 	try {
-		await executeJob(c.env, job);
-		return c.json({ success: true });
+		const origin = new URL(c.req.url).origin;
+		const result = await runJobWithAutoContinuation(c.env, job, c.executionCtx, runId, batchNumber, origin);
+		return c.json({ success: true, ...result });
 	} catch (err: any) {
 		return c.json({ error: err.message }, 500);
 	}
@@ -109,11 +115,13 @@ app.post('/api/sync/:id', async (c) => {
 app.post('/api/sync/all', async (c) => {
 	const list = await c.env.SYNC_CONFIGS.list({ prefix: 'job:' });
 	const results = [];
+	const origin = new URL(c.req.url).origin;
+
 	for (const k of list.keys) {
 		const job = await c.env.SYNC_CONFIGS.get<SyncJobConfig>(k.name, 'json');
 		if (job && job.enabled) {
 			try {
-				await executeJob(c.env, job);
+				await runJobWithAutoContinuation(c.env, job, c.executionCtx, undefined, 1, origin);
 				results.push({ id: job.id, status: 'success' });
 			} catch (err: any) {
 				results.push({ id: job.id, status: 'error', message: err.message });
@@ -123,30 +131,72 @@ app.post('/api/sync/all', async (c) => {
 	return c.json(results);
 });
 
-// --- STATIC ASSETS ---
 app.get('*', async (c) => {
-	// Try to fetch from assets binding
 	return await c.env.ASSETS.fetch(c.req.raw);
 });
 
-// Helper to execute job and update KV with status
-async function executeJob(env: Env, job: SyncJobConfig) {
+async function runJobWithAutoContinuation(
+	env: Env, 
+	job: SyncJobConfig, 
+	ctx: ExecutionContext, 
+	runId?: string, 
+	batchNumber: number = 1,
+	originUrl?: string
+) {
+	const currentRunId = runId || crypto.randomUUID();
+
 	try {
-		if (!env.SUPABASE_URL) throw new Error('SUPABASE_URL is missing. Check your .dev.vars (local) or secrets (prod).');
+		if (!env.SUPABASE_URL) throw new Error('SUPABASE_URL is missing.');
 		if (!env.SUPABASE_SERVICE_KEY) throw new Error('SUPABASE_SERVICE_KEY is missing.');
 		if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is missing.');
 
-		const runId = crypto.randomUUID();
-		await handleSync({
+		const result: SyncResult = await handleSync({
 			googleServiceAccount: env.GOOGLE_SERVICE_ACCOUNT_JSON,
 			supabaseUrl: env.SUPABASE_URL,
 			supabaseKey: env.SUPABASE_SERVICE_KEY
-		}, job, runId, env.SYNC_LOGS);
+		}, job, currentRunId, env.SYNC_LOGS, batchNumber);
 
-		job.lastRun = new Date().toISOString();
-		job.lastStatus = 'success';
-		delete job.lastError;
-		await env.SYNC_CONFIGS.put(`job:${job.id}`, JSON.stringify(job));
+		if (!result.hasMore) {
+			job.lastRun = new Date().toISOString();
+			job.lastStatus = 'success';
+			delete job.lastError;
+            
+            if (result.stats) {
+                const { totalRows, totalBatches, durationMs } = result.stats;
+                const minutes = Math.floor(durationMs / 60000);
+                const seconds = Math.floor((durationMs % 60000) / 1000);
+                job.lastSummary = `${totalRows.toLocaleString()} rows in ${totalBatches} batches (${minutes}m ${seconds}s)`;
+            }
+            
+			await env.SYNC_CONFIGS.put(`job:${job.id}`, JSON.stringify(job));
+		} else {
+			const workerUrl = originUrl || env.WORKER_URL;
+			
+			if (workerUrl) {
+				const nextUrl = `${workerUrl}/api/sync/${job.id}`;
+				console.log(`[Auto-Continuation] Spawning Batch ${result.nextBatch} via ${nextUrl}`);
+				
+				const nextBatchPromise = fetch(nextUrl, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${env.SYNC_API_KEY}`,
+						'X-Internal-Call': 'true'
+					},
+					body: JSON.stringify({
+						runId: currentRunId,
+						batchNumber: result.nextBatch
+					})
+				});
+				
+				ctx.waitUntil(nextBatchPromise);
+			} else {
+				console.warn('[Auto-Continuation] Cannot spawn next batch: WORKER_URL not set and no origin URL available.');
+			}
+		}
+
+		return { ...result, runId: currentRunId };
+
 	} catch (err: any) {
 		job.lastRun = new Date().toISOString();
 		job.lastStatus = 'error';
@@ -163,7 +213,7 @@ export default {
 		for (const k of list.keys) {
 			const job = await env.SYNC_CONFIGS.get<SyncJobConfig>(k.name, 'json');
 			if (job && job.enabled) {
-				ctx.waitUntil(executeJob(env, job));
+				ctx.waitUntil(runJobWithAutoContinuation(env, job, ctx));
 			}
 		}
 	}
