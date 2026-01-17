@@ -1,6 +1,14 @@
 import { BigQueryClient } from '../bigquery/client';
 import { SupabaseClient } from '../supabase/client';
-import { generateAddColumnsSQL, generateCreateTableSQL, SchemaField } from './schema';
+import { 
+    generateAddColumnsSQL, 
+    generateCreateTableSQL, 
+    generateDropColumnsSQL,
+    SchemaField,
+    detectSchemaChanges,
+    validateUpsertColumns,
+    buildUpsertValidationError 
+} from './schema';
 
 export interface SyncJobConfig {
     id: string;
@@ -48,9 +56,35 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig) {
     const createSql = generateCreateTableSQL(job.supabase.tableName, bqFields, job.supabase.upsertColumns);
     await sb.executeRawSQL(createSql);
 
-    // Delay preventivo para propagación de cambios en DB
-    console.log(`[PHASE 0] DDL Executed. Waiting 1000ms for stability...`);
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Validate upsert columns exist in BigQuery schema
+    const validation = validateUpsertColumns(job.supabase.upsertColumns, bqFields);
+    if (!validation.valid) {
+        throw new Error(buildUpsertValidationError(validation.invalidColumns));
+    }
+
+    // Detect schema drift
+    const supabaseSchema = await sb.getTableSchema(job.supabase.tableName);
+    const schemaChanges = detectSchemaChanges(bqFields, supabaseSchema);
+
+    // Add new columns
+    if (schemaChanges.columnsToAdd.length > 0) {
+        console.log(`[PHASE 0] Adding ${schemaChanges.columnsToAdd.length} new columns...`);
+        const addSql = generateAddColumnsSQL(job.supabase.tableName, schemaChanges.columnsToAdd);
+        await sb.executeRawSQL(addSql);
+    }
+
+    // Drop removed columns
+    if (schemaChanges.columnsToDrop.length > 0) {
+        console.log(`[PHASE 0] Dropping ${schemaChanges.columnsToDrop.length} obsolete columns...`);
+        const dropSql = generateDropColumnsSQL(job.supabase.tableName, schemaChanges.columnsToDrop);
+        await sb.executeRawSQL(dropSql);
+    }
+
+    // Wait after schema changes for DB propagation
+    if (schemaChanges.columnsToAdd.length > 0 || schemaChanges.columnsToDrop.length > 0) {
+        console.log(`[PHASE 0] Schema changes applied. Waiting 1000ms...`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    }
 
     // --- PHASE 1: Data Sync ---
     console.log(`[PHASE 1] Determining last sync date...`);
