@@ -16,24 +16,22 @@ export interface SyncJobConfig {
     name: string;
     enabled: boolean;
 
-    // BigQuery Source
     bigquery: {
         projectId: string;
         datasetId: string;
         tableOrView: string;
-        incrementalColumn?: string; // ej: "date_monday"
+        incrementalColumn?: string;
     };
 
-    // Supabase Destination
     supabase: {
         tableName: string;
-        upsertColumns: string[]; // ej: ["date_monday", "campaign_id"]
+        upsertColumns: string[];
     };
 
-    // Execution (Stored in KV)
     lastRun?: string;
     lastStatus?: 'success' | 'error';
     lastError?: string;
+    lastSummary?: string;
 }
 
 export interface GlobalAuth {
@@ -42,7 +40,31 @@ export interface GlobalAuth {
     supabaseKey: string;
 }
 
-export async function handleSync(auth: GlobalAuth, job: SyncJobConfig, runId: string, kvNamespace: KVNamespace) {
+export interface SyncResult {
+    hasMore: boolean;
+    nextBatch: number;
+    rowsProcessed: number;
+    stats?: {
+        totalRows: number;
+        totalBatches: number;
+        durationMs: number;
+    };
+}
+
+interface SyncState {
+    lastSyncDate: string | null;
+    bqFields: SchemaField[];
+    totalRows: number;
+    startTime: number;
+}
+
+export async function handleSync(
+    auth: GlobalAuth, 
+    job: SyncJobConfig, 
+    runId: string, 
+    kvNamespace: KVNamespace,
+    batchNumber: number = 1
+): Promise<SyncResult> {
     const logger = new Logger(job.id, job.name, runId);
     await logger.startRun(kvNamespace);
 
@@ -50,113 +72,164 @@ export async function handleSync(auth: GlobalAuth, job: SyncJobConfig, runId: st
         const bq = new BigQueryClient(auth.googleServiceAccount);
         const sb = new SupabaseClient(auth.supabaseUrl, auth.supabaseKey);
 
-        logger.info('SYNC_START', 'Starting sync', { bigquery: job.bigquery, supabase: job.supabase });
+        const stateKey = `sync_state:${job.id}:${runId}`;
+        let lastSyncDate: string | null = null;
+        let bqFields: SchemaField[] = [];
+        let totalRows = 0;
+        let startTime = Date.now();
 
-    // --- PHASE 0: Schema Sync ---
-    logger.info('SCHEMA_SYNC', 'Fetching BigQuery metadata', { table: job.bigquery.tableOrView });
-    const bqMetadata = await bq.getTableMetadata(job.bigquery.projectId, job.bigquery.datasetId, job.bigquery.tableOrView);
-    const bqFields: SchemaField[] = bqMetadata.schema.fields;
+        if (batchNumber === 1) {
+            logger.info('SYNC_START', 'Starting sync', { bigquery: job.bigquery, supabase: job.supabase });
 
-    logger.info('SCHEMA_SYNC', 'Ensuring Supabase table exists', { tableName: job.supabase.tableName });
-    const createSql = generateCreateTableSQL(job.supabase.tableName, bqFields, job.supabase.upsertColumns);
-    await sb.executeRawSQL(createSql);
+            logger.info('SCHEMA_SYNC', 'Fetching BigQuery metadata', { table: job.bigquery.tableOrView });
+            const bqMetadata = await bq.getTableMetadata(job.bigquery.projectId, job.bigquery.datasetId, job.bigquery.tableOrView);
+            bqFields = bqMetadata.schema.fields;
 
-    // Validate upsert columns exist in BigQuery schema
-    const validation = validateUpsertColumns(job.supabase.upsertColumns, bqFields);
-    if (!validation.valid) {
-        throw new Error(buildUpsertValidationError(validation.invalidColumns));
-    }
+            logger.info('SCHEMA_SYNC', 'Ensuring Supabase table exists', { tableName: job.supabase.tableName });
+            const createSql = generateCreateTableSQL(job.supabase.tableName, bqFields, job.supabase.upsertColumns);
+            await sb.executeRawSQL(createSql);
 
-    // Detect schema drift
-    const supabaseSchema = await sb.getTableSchema(job.supabase.tableName);
-    const schemaChanges = detectSchemaChanges(bqFields, supabaseSchema);
+            const validation = validateUpsertColumns(job.supabase.upsertColumns, bqFields);
+            if (!validation.valid) {
+                throw new Error(buildUpsertValidationError(validation.invalidColumns));
+            }
 
-    // Add new columns
-    if (schemaChanges.columnsToAdd.length > 0) {
-        logger.success('SCHEMA_SYNC', 'Adding new columns', { count: schemaChanges.columnsToAdd.length, columns: schemaChanges.columnsToAdd.map(c => c.name) });
-        const addSql = generateAddColumnsSQL(job.supabase.tableName, schemaChanges.columnsToAdd);
-        await sb.executeRawSQL(addSql);
-    }
+            const supabaseSchema = await sb.getTableSchema(job.supabase.tableName);
+            const schemaChanges = detectSchemaChanges(bqFields, supabaseSchema);
 
-    // Drop removed columns
-    if (schemaChanges.columnsToDrop.length > 0) {
-        logger.warning('SCHEMA_SYNC', 'Dropping obsolete columns', { count: schemaChanges.columnsToDrop.length, columns: schemaChanges.columnsToDrop });
-        const dropSql = generateDropColumnsSQL(job.supabase.tableName, schemaChanges.columnsToDrop);
-        await sb.executeRawSQL(dropSql);
-    }
+            if (schemaChanges.columnsToAdd.length > 0) {
+                logger.success('SCHEMA_SYNC', 'Adding new columns', { count: schemaChanges.columnsToAdd.length, columns: schemaChanges.columnsToAdd.map(c => c.name) });
+                const addSql = generateAddColumnsSQL(job.supabase.tableName, schemaChanges.columnsToAdd);
+                await sb.executeRawSQL(addSql);
+            }
 
-    // Wait after schema changes for DB propagation
-    if (schemaChanges.columnsToAdd.length > 0 || schemaChanges.columnsToDrop.length > 0) {
-        logger.info('SCHEMA_SYNC', 'Schema changes applied, waiting for propagation');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-    }
+            if (schemaChanges.columnsToDrop.length > 0) {
+                logger.warning('SCHEMA_SYNC', 'Dropping obsolete columns', { count: schemaChanges.columnsToDrop.length, columns: schemaChanges.columnsToDrop });
+                const dropSql = generateDropColumnsSQL(job.supabase.tableName, schemaChanges.columnsToDrop);
+                await sb.executeRawSQL(dropSql);
+            }
 
-    // --- PHASE 1: Data Sync ---
-    logger.info('INCREMENTAL', 'Determining last sync date');
-    let lastSyncDate = null;
-    if (job.bigquery.incrementalColumn) {
-        try {
-            lastSyncDate = await sb.getLastSyncDateFromTable(job.supabase.tableName, job.bigquery.incrementalColumn);
-        } catch (e: any) {
-            logger.warning('INCREMENTAL', 'Could not fetch last sync date', { reason: e.message });
+            if (schemaChanges.columnsToAdd.length > 0 || schemaChanges.columnsToDrop.length > 0) {
+                logger.info('SCHEMA_SYNC', 'Schema changes applied, waiting for propagation');
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            logger.info('INCREMENTAL', 'Determining last sync date');
+            if (job.bigquery.incrementalColumn) {
+                try {
+                    lastSyncDate = await sb.getLastSyncDateFromTable(job.supabase.tableName, job.bigquery.incrementalColumn);
+                } catch (e: any) {
+                    logger.warning('INCREMENTAL', 'Could not fetch last sync date', { reason: e.message });
+                }
+            }
+            logger.info('INCREMENTAL', 'Last sync date determined', { lastSyncDate: lastSyncDate || 'NONE' });
+
+            await kvNamespace.put(stateKey, JSON.stringify({ 
+                lastSyncDate, 
+                bqFields,
+                totalRows: 0,
+                startTime
+            }), { expirationTtl: 86400 });
+        
+        } else {
+            logger.info('BATCH_START', `Starting batch ${batchNumber}`);
+            const state = await kvNamespace.get<SyncState>(stateKey, 'json');
+            if (!state) {
+                throw new Error(`Sync state not found for runId ${runId} (batch ${batchNumber}). The run may have expired or failed.`);
+            }
+            lastSyncDate = state.lastSyncDate;
+            bqFields = state.bqFields;
+            totalRows = state.totalRows || 0;
+            startTime = state.startTime || Date.now();
         }
-    }
 
-    logger.info('INCREMENTAL', 'Last sync date determined', { lastSyncDate: lastSyncDate || 'NONE' });
-
-    let filter = '';
-    if (lastSyncDate && job.bigquery.incrementalColumn) {
-        // Detect column type from BigQuery schema
-        const incrementalField = bqFields.find(
-            f => f.name.toLowerCase() === job.bigquery.incrementalColumn!.toLowerCase()
-        );
+        let filter = '';
+        let orderBy = '';
         
-        // Use strict > for TIMESTAMP (millisecond precision), >= for DATE (day precision)
-        const operator = incrementalField?.type === 'TIMESTAMP' ? '>' : '>=';
-        filter = `WHERE ${job.bigquery.incrementalColumn} ${operator} '${lastSyncDate}'`;
-        
-        logger.debug('INCREMENTAL', 'Incremental filter applied', { operator, columnType: incrementalField?.type || 'UNKNOWN', filter });
-    }
-
-    const sql = `
-    SELECT * 
-    FROM \`${job.bigquery.projectId}.${job.bigquery.datasetId}.${job.bigquery.tableOrView}\`
-    ${filter}
-  `;
-
-    logger.info('DATA_FETCH', 'Fetching data from BigQuery');
-    const data = await bq.queryPaginated<any>(job.bigquery.projectId, sql);
-    logger.success('DATA_FETCH', 'Data fetched from BigQuery', { totalRecords: data.length });
-
-    if (data.length === 0) {
-        logger.info('DATA_FETCH', 'No new data to sync');
-        await logger.endRun(kvNamespace, 'success');
-        return;
-    }
-
-    // Hybrid batching: Process data in page-batch chunks for better memory management
-    // 5 pages * 5k rows = 25k rows per page-batch, then split into 2500-row upserts
-    logger.info('UPSERT', 'Starting hybrid batch processing');
-    const PAGES_PER_BATCH = 5; // 5 pages * 5k rows = 25k rows per batch
-    const ROWS_PER_PAGE = 5000;
-    const BATCH_SIZE = 2500; // Supabase upsert batch size
-    
-    for (let i = 0; i < data.length; i += (PAGES_PER_BATCH * ROWS_PER_PAGE)) {
-        const pageBatch = data.slice(i, i + (PAGES_PER_BATCH * ROWS_PER_PAGE));
-        logger.info('UPSERT', 'Processing page-batch', { rowsInBatch: pageBatch.length });
-        
-        // Upsert in smaller chunks to Supabase
-        for (let j = 0; j < pageBatch.length; j += BATCH_SIZE) {
-            const upsertBatch = pageBatch.slice(j, j + BATCH_SIZE);
-            logger.debug('UPSERT', 'Upserting sub-batch', { batchNum: Math.floor(j / BATCH_SIZE) + 1, batchSize: upsertBatch.length });
-            await sb.upsertTableData(job.supabase.tableName, upsertBatch, job.supabase.upsertColumns.join(','));
+        if (job.bigquery.incrementalColumn) {
+            if (lastSyncDate) {
+                const incrementalField = bqFields.find(
+                    f => f.name.toLowerCase() === job.bigquery.incrementalColumn!.toLowerCase()
+                );
+                const operator = incrementalField?.type === 'TIMESTAMP' ? '>' : '>=';
+                filter = `WHERE ${job.bigquery.incrementalColumn} ${operator} '${lastSyncDate}'`;
+            }
+            orderBy = `ORDER BY ${job.bigquery.incrementalColumn} ASC`;
+        } else {
+            if (job.supabase.upsertColumns.length > 0) {
+                orderBy = `ORDER BY ${job.supabase.upsertColumns.join(', ')} ASC`;
+            }
         }
-        
-        logger.success('UPSERT', 'Page-batch completed', { batchNum: Math.floor(i / (PAGES_PER_BATCH * ROWS_PER_PAGE)) + 1 });
-    }
 
-    logger.success('SYNC_COMPLETE', 'Job finished successfully', { totalRecords: data.length });
-        await logger.endRun(kvNamespace, 'success');
+        const BATCH_LIMIT = 10000;
+        const offset = (batchNumber - 1) * BATCH_LIMIT;
+
+        const sql = `
+            SELECT * 
+            FROM \`${job.bigquery.projectId}.${job.bigquery.datasetId}.${job.bigquery.tableOrView}\`
+            ${filter}
+            ${orderBy}
+            LIMIT ${BATCH_LIMIT} OFFSET ${offset}
+        `;
+
+        logger.info('DATA_FETCH', `Fetching batch ${batchNumber}`, { limit: BATCH_LIMIT, offset });
+        const data = await bq.queryPaginated<any>(job.bigquery.projectId, sql);
+        logger.success('DATA_FETCH', `Batch ${batchNumber} fetched`, { 
+            count: data.length,
+            batchLimit: BATCH_LIMIT,
+            hasMore: data.length === BATCH_LIMIT,
+            offset 
+        });
+
+        if (data.length > 0) {
+            const UPSERT_BATCH_SIZE = 2500;
+            for (let j = 0; j < data.length; j += UPSERT_BATCH_SIZE) {
+                const upsertBatch = data.slice(j, j + UPSERT_BATCH_SIZE);
+                logger.debug('UPSERT', `Upserting sub-batch ${Math.floor(j/UPSERT_BATCH_SIZE)+1}`, { count: upsertBatch.length });
+                await sb.upsertTableData(job.supabase.tableName, upsertBatch, job.supabase.upsertColumns.join(','));
+            }
+        }
+
+        totalRows += data.length;
+        const hasMore = data.length === BATCH_LIMIT;
+
+        if (!hasMore) {
+            const durationMs = Date.now() - startTime;
+            const minutes = Math.floor(durationMs / 60000);
+            const seconds = Math.floor((durationMs % 60000) / 1000);
+            const durationStr = `${minutes}m ${seconds}s`;
+
+            logger.success('SYNC_COMPLETE', 'Job finished successfully', { 
+                totalBatches: batchNumber, 
+                totalRows,
+                duration: durationStr
+            });
+            
+            await logger.endRun(kvNamespace, 'success');
+            await kvNamespace.delete(stateKey);
+
+            return { 
+                hasMore, 
+                nextBatch: batchNumber + 1, 
+                rowsProcessed: data.length,
+                stats: {
+                    totalRows,
+                    totalBatches: batchNumber,
+                    durationMs
+                }
+            };
+        } else {
+            await kvNamespace.put(stateKey, JSON.stringify({ 
+                lastSyncDate, 
+                bqFields,
+                totalRows,
+                startTime
+            }), { expirationTtl: 86400 });
+
+            logger.success('BATCH_COMPLETE', `Batch ${batchNumber} completed. Proceeding to next batch.`);
+            return { hasMore, nextBatch: batchNumber + 1, rowsProcessed: data.length };
+        }
+
     } catch (err: any) {
         await logger.errorSync('SYNC_ERROR', 'Sync failed', { error: err.message, stack: err.stack?.substring(0, 500) });
         await logger.endRun(kvNamespace, 'error');
