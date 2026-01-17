@@ -830,3 +830,15 @@ body::before {
     opacity: 0;
   }
 }
+
+.incremental-warning {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid var(--log-warning);
+  color: var(--log-warning);
+  padding: 10px 12px;
+  margin-top: 8px;
+  font-family: var(--font-data);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  animation: slideUp 0.3s ease;
+}

@@ -96,6 +96,9 @@
                         <div class="form-group">
                             <label>Incremental Column (Optional)</label>
                             <input type="text" id="bq-column" class="input-field" placeholder="date_monday">
+                            <div id="incremental-warning" class="incremental-warning hidden">
+                                ⚠️ FULL REFRESH MODE - Without an incremental column, ALL data will be fetched on every sync. This is recommended only for small tables.
+                            </div>
                         </div>
                     </div>
 

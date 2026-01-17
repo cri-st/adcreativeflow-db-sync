@@ -348,6 +348,12 @@ function editJob(id) {
     document.getElementById('bq-dataset').value = job.bigquery.datasetId;
     document.getElementById('bq-table').value = job.bigquery.tableOrView;
     document.getElementById('bq-column').value = job.bigquery.incrementalColumn || '';
+    const warning = document.getElementById('incremental-warning');
+    if (job.bigquery.incrementalColumn) {
+        warning.classList.add('hidden');
+    } else {
+        warning.classList.remove('hidden');
+    }
     document.getElementById('sb-table').value = job.supabase.tableName;
     document.getElementById('sb-columns').value = job.supabase.upsertColumns.join(', ');
 
@@ -622,11 +628,21 @@ createBtn.addEventListener('click', () => {
     modalTitle.innerText = 'Configure New Sync Job';
     jobForm.reset();
     document.getElementById('job-id').value = '';
+    document.getElementById('incremental-warning').classList.remove('hidden');
     jobModal.classList.remove('hidden');
 });
 cancelModal.addEventListener('click', () => jobModal.classList.add('hidden'));
 jobForm.addEventListener('submit', saveJob);
 window.addEventListener('click', (e) => e.target === jobModal && jobModal.classList.add('hidden'));
+
+document.getElementById('bq-column').addEventListener('input', function() {
+    const warning = document.getElementById('incremental-warning');
+    if (this.value.trim() === '') {
+        warning.classList.remove('hidden');
+    } else {
+        warning.classList.add('hidden');
+    }
+});
 
 logModalClose.addEventListener('click', closeLogModal);
 logClearBtn.addEventListener('click', clearLogs);
