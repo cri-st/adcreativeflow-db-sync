@@ -271,31 +271,59 @@ async function syncJob(id) {
     btn.innerText = 'SYNCING...';
     btn.disabled = true;
 
-    openLogModal(id, job?.name || id);
+    openLogModal(id, job?.name || id, true);
+
+    let batchNumber = 1;
+    let runId = null;
 
     try {
-        const res = await fetch(`/api/sync/${id}`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${state.apiKey}` }
-        });
-        if (res.ok) {
-            fetchJobs();
-        } else {
-            const data = await res.json();
+        while (true) {
+            btn.innerText = batchNumber === 1 ? 'SYNCING...' : `BATCH ${batchNumber}...`;
             
-            state.logs.push({
-                timestamp: new Date().toISOString(),
-                level: 'ERROR',
-                jobId: id,
-                jobName: job?.name || id,
-                runId: 'frontend-error',
-                phase: 'SYNC_ERROR',
-                message: data.error || 'Sync failed'
+            const res = await fetch(`/api/sync/${id}`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${state.apiKey}` 
+                },
+                body: JSON.stringify({ batchNumber, runId })
             });
-            renderLogs();
-            
-            showToast(`Sync Failed: ${data.error}`);
-            fetchJobs();
+
+            if (!res.ok) {
+                const data = await res.json();
+                state.logs.push({
+                    timestamp: new Date().toISOString(),
+                    level: 'ERROR',
+                    jobId: id,
+                    jobName: job?.name || id,
+                    runId: runId || 'frontend-error',
+                    phase: 'SYNC_ERROR',
+                    message: data.error || 'Sync failed'
+                });
+                renderLogs();
+                showToast(`Sync Failed: ${data.error}`);
+                fetchJobs();
+                return;
+            }
+
+            const result = await res.json();
+            runId = result.runId;
+            state.currentRunId = runId;
+
+            if (result.logs && result.logs.length > 0) {
+                state.logs = state.logs.concat(result.logs);
+                renderLogs();
+                updateLogStats();
+            }
+
+            if (!result.hasMore) {
+                // Sync complete
+                fetchJobs();
+                return;
+            }
+
+            // Continue with next batch
+            batchNumber = result.nextBatch;
         }
     } catch (err) {
         state.logs.push({
@@ -303,12 +331,11 @@ async function syncJob(id) {
             level: 'ERROR',
             jobId: id,
             jobName: job?.name || id,
-            runId: 'frontend-error',
+            runId: runId || 'frontend-error',
             phase: 'NETWORK_ERROR',
             message: 'Network error during sync request'
         });
         renderLogs();
-        
         showToast('Network Error during sync');
     } finally {
         btn.innerText = originalText;
@@ -402,15 +429,23 @@ async function fetchLogsForRun(jobId, runId) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         
         const data = await res.json();
-        state.logs = data.logs || [];
-        renderLogs();
-        updateLogStats();
+        
+        if (data.logs && data.logs.length > 0) {
+            const existingKeys = new Set(state.logs.map(l => `${l.timestamp}|${l.phase}`));
+            const newLogs = data.logs.filter(l => !existingKeys.has(`${l.timestamp}|${l.phase}`));
+            
+            if (newLogs.length > 0) {
+                state.logs = state.logs.concat(newLogs);
+                renderLogs();
+                updateLogStats();
+            }
+        }
     } catch (err) {
         console.error('Failed to fetch logs for run:', err);
     }
 }
 
-async function openLogModal(jobId, jobName) {
+async function openLogModal(jobId, jobName, isNewSync = false) {
     state.currentLogJobId = jobId;
     state.currentLogJobName = jobName;
     state.logs = [];
@@ -437,6 +472,16 @@ async function openLogModal(jobId, jobName) {
     
     logEntries.innerHTML = '<div class="log-loading"></div>';
     logModal.classList.remove('hidden');
+    
+    if (isNewSync) {
+        logEntries.innerHTML = '<div class="log-empty-state"><span class="mono">STARTING SYNC...</span></div>';
+        state.logPollingInterval = setInterval(() => {
+            if (state.currentRunId) {
+                fetchLogsForRun(jobId, state.currentRunId);
+            }
+        }, 1000);
+        return;
+    }
     
     try {
         const runsRes = await fetch(`/api/logs/${jobId}`, {
@@ -572,9 +617,11 @@ async function fetchLogs(jobId) {
             }
         }
         
-        state.logs = mergedLogs;
-        renderLogs();
-        updateLogStats();
+        if (mergedLogs.length > 0) {
+            state.logs = state.logs.concat(mergedLogs);
+            renderLogs();
+            updateLogStats();
+        }
         
     } catch (err) {
         console.error('Failed to fetch logs:', err);
