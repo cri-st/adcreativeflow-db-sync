@@ -1,6 +1,6 @@
 import { BigQueryClient } from '../bigquery/client';
 import { SupabaseClient } from '../supabase/client';
-import { Logger, truncateSql } from '../logger';
+import { Logger, truncateSql, LogEntry } from '../logger';
 import { 
     generateAddColumnsSQL, 
     generateCreateTableSQL, 
@@ -49,6 +49,7 @@ export interface SyncResult {
         totalBatches: number;
         durationMs: number;
     };
+    logs?: LogEntry[];
 }
 
 interface SyncState {
@@ -161,7 +162,7 @@ export async function handleSync(
                 const incrementalField = bqFields.find(
                     f => f.name.toLowerCase() === job.bigquery.incrementalColumn!.toLowerCase()
                 );
-                const operator = incrementalField?.type === 'TIMESTAMP' ? '>' : '>=';
+                const operator = '>';
                 filter = `WHERE ${job.bigquery.incrementalColumn} ${operator} '${lastSyncDate}'`;
             }
             orderBy = `ORDER BY ${job.bigquery.incrementalColumn} ASC`;
@@ -218,7 +219,7 @@ export async function handleSync(
         const hasMore = data.length === BATCH_LIMIT;
 
         // DIAGNOSTIC: Log continuation decision
-        console.log(`[CONTINUATION_DECISION] Batch ${batchNumber} complete:`, {
+        logger.info('CONTINUATION_DECISION', `Batch ${batchNumber} complete`, {
             dataFetched: data.length,
             batchLimit: BATCH_LIMIT,
             hasMore,
@@ -251,7 +252,8 @@ export async function handleSync(
                     totalRows,
                     totalBatches: batchNumber,
                     durationMs
-                }
+                },
+                logs: logger.getLogs()
             };
         } else {
             await kvNamespace.put(stateKey, JSON.stringify({ 
@@ -264,11 +266,11 @@ export async function handleSync(
             }), { expirationTtl: 86400 });
 
             logger.success('BATCH_COMPLETE', `Batch ${batchNumber} completed. Proceeding to next batch.`);
-            return { hasMore, nextBatch: batchNumber + 1, rowsProcessed: data.length };
+            return { hasMore, nextBatch: batchNumber + 1, rowsProcessed: data.length, logs: logger.getLogs() };
         }
 
     } catch (err: any) {
-        await logger.errorSync('SYNC_ERROR', 'Sync failed', { error: err.message, stack: err.stack?.substring(0, 500) });
+        logger.error('SYNC_ERROR', 'Sync failed', { error: err.message, stack: err.stack?.substring(0, 500) });
         await logger.endRun(kvNamespace, 'error');
         throw err;
     }

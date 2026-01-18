@@ -29,7 +29,6 @@ export class Logger {
   private readonly runId: string;
   private readonly logs: LogEntry[] = [];
   private kv: KVNamespace | null = null;
-  private logCount: number = 0;
 
   constructor(jobId: string, jobName: string, runId: string) {
     this.jobId = jobId;
@@ -50,10 +49,8 @@ export class Logger {
 
   private sanitize(metadata?: Record<string, unknown>): Record<string, unknown> | undefined {
     if (!metadata) return undefined;
-
     const sensitiveKeys = ['key', 'token', 'password', 'secret', 'credential', 'auth'];
     const sanitized: Record<string, unknown> = {};
-
     for (const [k, v] of Object.entries(metadata)) {
       if (sensitiveKeys.some(s => k.toLowerCase().includes(s))) {
         sanitized[k] = '***REDACTED***';
@@ -63,13 +60,7 @@ export class Logger {
         sanitized[k] = v;
       }
     }
-
-    try {
-      JSON.stringify(sanitized);
-    } catch {
-      return { error: '[Circular reference detected]' };
-    }
-
+    try { JSON.stringify(sanitized); } catch { return { error: '[Circular reference detected]' }; }
     return sanitized;
   }
 
@@ -86,122 +77,35 @@ export class Logger {
     };
   }
 
-  private writeLog(entry: LogEntry): void {
-    if (!this.kv) {
-      console.error('Logger: KV not initialized. Call startRun() first.');
-      return;
-    }
-
-    const paddedTs = Date.now().toString().padStart(16, '0');
-    const key = `logs:${entry.jobId}:${entry.runId}:${paddedTs}`;
-
-    // Fire and forget - DO NOT await
-    void this.kv.put(key, JSON.stringify(entry), { expirationTtl: 86400 })
-      .catch(err => console.error('Log write failed:', err));
-
-    const emoji = this.getLevelEmoji(entry.level);
-    console.log(`${emoji} [${entry.timestamp}] [${entry.jobName}] [${entry.phase}] ${entry.message}`);
-
-    this.logs.push(entry);
-  }
-
   private log(level: LogLevel, phase: string, message: string, metadata?: Record<string, unknown>): void {
     const entry = this.createEntry(level, phase, message, this.sanitize(metadata));
-
-    if (this.logCount >= 500) {
-      console.warn('Log limit reached (500), subsequent logs in-memory only');
-      const emoji = this.getLevelEmoji(entry.level);
-      console.log(`${emoji} [${entry.timestamp}] [${this.jobName}] [${phase}] ${message}`);
-      this.logs.push(entry);
-      return;
-    }
-
-    this.writeLog(entry);
-    this.logCount++;
-  }
-
-  info(phase: string, message: string, metadata?: Record<string, unknown>): void {
-    this.log('INFO', phase, message, metadata);
-  }
-
-  success(phase: string, message: string, metadata?: Record<string, unknown>): void {
-    this.log('SUCCESS', phase, message, metadata);
-  }
-
-  warning(phase: string, message: string, metadata?: Record<string, unknown>): void {
-    this.log('WARNING', phase, message, metadata);
-  }
-
-  error(phase: string, message: string, metadata?: Record<string, unknown>): void {
-    this.log('ERROR', phase, message, metadata);
-  }
-
-  /**
-   * Awaitable error logging for critical errors that MUST be persisted before continuing.
-   * Use this in catch blocks where you need to ensure the error is written to KV.
-   */
-  async errorSync(phase: string, message: string, metadata?: Record<string, unknown>): Promise<void> {
-    if (!this.kv) {
-      console.error('Logger: KV not initialized. Call startRun() first.');
-      return;
-    }
-
-    const entry = this.createEntry('ERROR', phase, message, this.sanitize(metadata));
-
-    if (this.logCount >= 500) {
-      console.warn('Log limit reached (500), subsequent logs in-memory only');
-      const emoji = this.getLevelEmoji(entry.level);
-      console.log(`${emoji} [${entry.timestamp}] [${this.jobName}] [${phase}] ${message}`);
-      this.logs.push(entry);
-      return;
-    }
-
-    const paddedTs = Date.now().toString().padStart(16, '0');
-    const key = `logs:${entry.jobId}:${entry.runId}:${paddedTs}`;
-
-    try {
-      await this.kv.put(key, JSON.stringify(entry), { expirationTtl: 86400 });
-    } catch (err) {
-      console.error('Critical error log write failed:', err);
-    }
-
     const emoji = this.getLevelEmoji(entry.level);
     console.log(`${emoji} [${entry.timestamp}] [${this.jobName}] [${phase}] ${message}`);
-
-    this.logs.push(entry);
-    this.logCount++;
+    if (this.logs.length < 500) {
+      this.logs.push(entry);
+    }
   }
 
-  debug(phase: string, message: string, metadata?: Record<string, unknown>): void {
-    this.log('DEBUG', phase, message, metadata);
-  }
-
-  getLogs(): LogEntry[] {
-    return [...this.logs];
-  }
+  info(phase: string, message: string, metadata?: Record<string, unknown>): void { this.log('INFO', phase, message, metadata); }
+  success(phase: string, message: string, metadata?: Record<string, unknown>): void { this.log('SUCCESS', phase, message, metadata); }
+  warning(phase: string, message: string, metadata?: Record<string, unknown>): void { this.log('WARNING', phase, message, metadata); }
+  error(phase: string, message: string, metadata?: Record<string, unknown>): void { this.log('ERROR', phase, message, metadata); }
+  debug(phase: string, message: string, metadata?: Record<string, unknown>): void { this.log('DEBUG', phase, message, metadata); }
+  getLogs(): LogEntry[] { return [...this.logs]; }
 
   async startRun(kv: KVNamespace): Promise<void> {
     this.kv = kv;
-
-    await kv.put(`logs:${this.jobId}:latest`, JSON.stringify({
-      runId: this.runId,
-      timestamp: new Date().toISOString()
-    }), { expirationTtl: 86400 });
-
-    // Add to jobRuns index
+    await kv.put(`logs:${this.jobId}:latest`, JSON.stringify({ runId: this.runId, timestamp: new Date().toISOString() }), { expirationTtl: 86400 });
     const indexKey = `jobRuns:${this.jobId}`;
     const existingRuns = await kv.get<RunInfo[]>(indexKey, 'json') || [];
-    existingRuns.unshift({
-      runId: this.runId,
-      startedAt: new Date().toISOString(),
-      status: 'running'
-    });
-    // Keep last 50 runs
-    const trimmedRuns = existingRuns.slice(0, 50);
-    await kv.put(indexKey, JSON.stringify(trimmedRuns), { expirationTtl: 2592000 }); // 30 days
+    existingRuns.unshift({ runId: this.runId, startedAt: new Date().toISOString(), status: 'running' });
+    await kv.put(indexKey, JSON.stringify(existingRuns.slice(0, 50)), { expirationTtl: 2592000 });
   }
 
   async endRun(kv: KVNamespace, status: 'success' | 'error'): Promise<void> {
+    if (this.logs.length > 0) {
+      await kv.put(`logs:${this.jobId}:${this.runId}`, JSON.stringify(this.logs), { expirationTtl: 86400 });
+    }
     const indexKey = `jobRuns:${this.jobId}`;
     const runs = await kv.get<RunInfo[]>(indexKey, 'json') || [];
     const runIndex = runs.findIndex(r => r.runId === this.runId);
@@ -212,66 +116,25 @@ export class Logger {
     }
   }
 
-  static async getRecentLogs(
-    kv: KVNamespace,
-    jobId: string,
-    runId?: string,
-    limit: number = 500
-  ): Promise<LogEntry[]> {
+  static async getRecentLogs(kv: KVNamespace, jobId: string, runId?: string, limit: number = 500): Promise<LogEntry[]> {
     if (!runId) {
       const latest = await kv.get<{ runId: string }>(`logs:${jobId}:latest`, 'json');
       if (!latest) return [];
       runId = latest.runId;
     }
-
-    // List all keys with cursor pagination
-    const prefix = `logs:${jobId}:${runId}:`;
-    const allKeys: string[] = [];
-    let cursor: string | undefined;
-
-    do {
-      const result = await kv.list({ prefix, cursor });
-      allKeys.push(...result.keys.map(k => k.name));
-      cursor = result.list_complete ? undefined : result.cursor;
-    } while (cursor);
-
-    const entries: LogEntry[] = [];
-    for (let i = 0; i < allKeys.length && entries.length < limit; i += 50) {
-      const batch = allKeys.slice(i, i + 50);
-      const results = await Promise.all(batch.map(k => kv.get<LogEntry>(k, 'json')));
-      entries.push(...results.filter((e): e is LogEntry => e !== null));
-    }
-
-    return entries
-      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-      .slice(0, limit);
+    const logs = await kv.get<LogEntry[]>(`logs:${jobId}:${runId}`, 'json') || [];
+    return logs.sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, limit);
   }
 
-  static async getJobRuns(
-    kv: KVNamespace,
-    jobId: string
-  ): Promise<RunInfo[]> {
-    const indexKey = `jobRuns:${jobId}`;
-    return await kv.get<RunInfo[]>(indexKey, 'json') || [];
+  static async getJobRuns(kv: KVNamespace, jobId: string): Promise<RunInfo[]> {
+    return await kv.get<RunInfo[]>(`jobRuns:${jobId}`, 'json') || [];
   }
 
-  static async clearLogs(
-    kv: KVNamespace,
-    jobId: string,
-    runId?: string
-  ): Promise<number> {
-    const prefix = runId ? `logs:${jobId}:${runId}:` : `logs:${jobId}:`;
+  static async clearLogs(kv: KVNamespace, jobId: string, runId?: string): Promise<number> {
     let deleted = 0;
-    let cursor: string | undefined;
-
-    do {
-      const result = await kv.list({ prefix, cursor });
-      await Promise.all(result.keys.map(k => kv.delete(k.name)));
-      deleted += result.keys.length;
-      cursor = result.list_complete ? undefined : result.cursor;
-    } while (cursor);
-
     if (runId) {
+      await kv.delete(`logs:${jobId}:${runId}`);
+      deleted = 1;
       const indexKey = `jobRuns:${jobId}`;
       const runs = await kv.get<RunInfo[]>(indexKey, 'json') || [];
       const updated = runs.filter(r => r.runId !== runId);
@@ -280,23 +143,20 @@ export class Logger {
       } else {
         await kv.delete(indexKey);
       }
-
       const latest = await kv.get<{ runId: string }>(`logs:${jobId}:latest`, 'json');
       if (latest?.runId === runId) {
         if (updated.length > 0) {
-          await kv.put(`logs:${jobId}:latest`, JSON.stringify({
-            runId: updated[0].runId,
-            timestamp: updated[0].startedAt
-          }), { expirationTtl: 86400 });
+          await kv.put(`logs:${jobId}:latest`, JSON.stringify({ runId: updated[0].runId, timestamp: updated[0].startedAt }), { expirationTtl: 86400 });
         } else {
           await kv.delete(`logs:${jobId}:latest`);
         }
       }
     } else {
+      const runs = await kv.get<RunInfo[]>(`jobRuns:${jobId}`, 'json') || [];
+      for (const run of runs) { await kv.delete(`logs:${jobId}:${run.runId}`); deleted++; }
       await kv.delete(`logs:${jobId}:latest`);
       await kv.delete(`jobRuns:${jobId}`);
     }
-
     return deleted;
   }
 }

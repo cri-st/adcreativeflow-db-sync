@@ -100,15 +100,6 @@ app.post('/api/sync/:id', async (c) => {
 	const runId = body.runId;
 	const batchNumber = body.batchNumber || 1;
 
-	// DIAGNOSTIC: Log inbound request
-	console.log(`[API_INBOUND] Received sync request:`, {
-		jobId: id,
-		runId,
-		batchNumber,
-		isInternalCall: c.req.header('X-Internal-Call') === 'true',
-		hasAuth: !!c.req.header('Authorization')
-	});
-
 	const job = await c.env.SYNC_CONFIGS.get<SyncJobConfig>(`job:${id}`, 'json');
 	if (!job) return c.json({ error: 'Job not found' }, 404);
 
@@ -165,99 +156,19 @@ async function runJobWithAutoContinuation(
 			supabaseKey: env.SUPABASE_SERVICE_KEY
 		}, job, currentRunId, env.SYNC_LOGS, batchNumber);
 
-		// DIAGNOSTIC: Log what handler returned
-		console.log(`[HANDLER_RESULT] Batch ${batchNumber} handler returned:`, {
-			hasMore: result.hasMore,
-			nextBatch: result.nextBatch,
-			rowsProcessed: result.rowsProcessed,
-			stats: result.stats
-		});
-
 		if (!result.hasMore) {
 			job.lastRun = new Date().toISOString();
 			job.lastStatus = 'success';
 			delete job.lastError;
             
-            if (result.stats) {
-                const { totalRows, totalBatches, durationMs } = result.stats;
-                const minutes = Math.floor(durationMs / 60000);
-                const seconds = Math.floor((durationMs % 60000) / 1000);
-                job.lastSummary = `${totalRows.toLocaleString()} rows in ${totalBatches} batches (${minutes}m ${seconds}s)`;
-            }
+			if (result.stats) {
+				const { totalRows, totalBatches, durationMs } = result.stats;
+				const minutes = Math.floor(durationMs / 60000);
+				const seconds = Math.floor((durationMs % 60000) / 1000);
+				job.lastSummary = `${totalRows.toLocaleString()} rows in ${totalBatches} batches (${minutes}m ${seconds}s)`;
+			}
             
 			await env.SYNC_CONFIGS.put(`job:${job.id}`, JSON.stringify(job));
-		} else {
-			// DIAGNOSTIC: Entering auto-continuation branch
-			console.log(`[AUTO_CONTINUATION_START] Spawning next batch:`, {
-				currentBatch: batchNumber,
-				nextBatch: result.nextBatch,
-				originUrl,
-				envWorkerUrl: env.WORKER_URL,
-				runId: currentRunId
-			});
-			
-			const workerUrl = originUrl || env.WORKER_URL;
-			
-			// DIAGNOSTIC: Log URL decision
-			console.log(`[AUTO_CONTINUATION_URL] Worker URL selected:`, {
-				workerUrl,
-				usingOrigin: !!originUrl,
-				usingEnvVar: !originUrl && !!env.WORKER_URL
-			});
-			
-			if (workerUrl) {
-				const nextUrl = `${workerUrl}/api/sync/${job.id}`;
-				console.log(`[Auto-Continuation] Spawning Batch ${result.nextBatch} via ${nextUrl}`);
-				
-				const nextBatchPromise = (async () => {
-					try {
-						console.log(`[AUTO_CONTINUATION_FETCH] Starting fetch to:`, {
-							url: nextUrl,
-							batchNumber: result.nextBatch,
-							runId: currentRunId
-						});
-						
-						const response = await fetch(nextUrl, {
-							method: 'POST',
-							headers: {
-								'Content-Type': 'application/json',
-								'Authorization': `Bearer ${env.SYNC_API_KEY}`,
-								'X-Internal-Call': 'true'
-							},
-							body: JSON.stringify({
-								runId: currentRunId,
-								batchNumber: result.nextBatch
-							})
-						});
-						
-						console.log(`[AUTO_CONTINUATION_RESPONSE] Batch ${result.nextBatch} fetch completed:`, {
-							status: response.status,
-							statusText: response.statusText,
-							ok: response.ok
-						});
-						
-						if (!response.ok) {
-							const body = await response.text().catch(() => 'Unable to read body');
-							console.error(`[AUTO_CONTINUATION_ERROR] Batch ${result.nextBatch} fetch failed:`, {
-								status: response.status,
-								body: body.substring(0, 200)
-							});
-						}
-						
-						return response;
-					} catch (error: any) {
-						console.error(`[AUTO_CONTINUATION_EXCEPTION] Batch ${result.nextBatch} fetch threw:`, {
-							error: error.message,
-							stack: error.stack?.substring(0, 300)
-						});
-						throw error;
-					}
-				})();
-				
-				ctx.waitUntil(nextBatchPromise);
-			} else {
-				console.warn('[Auto-Continuation] Cannot spawn next batch: WORKER_URL not set and no origin URL available.');
-			}
 		}
 
 		return { ...result, runId: currentRunId };
