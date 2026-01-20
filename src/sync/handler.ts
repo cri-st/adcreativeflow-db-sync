@@ -156,6 +156,7 @@ export async function handleSync(
         let filter = '';
         let orderBy = '';
         const cursorColumn = job.bigquery.incrementalColumn || job.supabase.upsertColumns[0];
+        const tieBreaker = job.supabase.upsertColumns[0];
         
         if (job.bigquery.incrementalColumn) {
             if (lastSyncDate) {
@@ -165,7 +166,7 @@ export async function handleSync(
                 const operator = '>';
                 filter = `WHERE ${job.bigquery.incrementalColumn} ${operator} '${lastSyncDate}'`;
             }
-            orderBy = `ORDER BY ${job.bigquery.incrementalColumn} ASC`;
+            orderBy = `ORDER BY ${job.bigquery.incrementalColumn} ASC, ${tieBreaker} ASC`;
         } else {
             if (job.supabase.upsertColumns.length > 0) {
                 orderBy = `ORDER BY ${job.supabase.upsertColumns.join(', ')} ASC`;
@@ -174,14 +175,18 @@ export async function handleSync(
 
         if (batchNumber > 1 && loadedCursor && loadedCursor[cursorColumn] !== undefined) {
             const cursorValue = loadedCursor[cursorColumn];
-            const cursorFilter = typeof cursorValue === 'string' 
-                ? `${cursorColumn} > '${cursorValue}'`
-                : `${cursorColumn} > ${cursorValue}`;
+            const tieValue = loadedCursor[tieBreaker];
+            const quotedCursor = typeof cursorValue === 'string' ? `'${cursorValue}'` : cursorValue;
+            const quotedTie = typeof tieValue === 'string' ? `'${tieValue}'` : tieValue;
+            
+            // Compound cursor condition: (incCol > cursor) OR (incCol = cursor AND tieBreaker > cursorTie)
+            const cursorFilter = tieValue !== undefined && cursorColumn !== tieBreaker
+                ? `((${cursorColumn} > ${quotedCursor}) OR (${cursorColumn} = ${quotedCursor} AND ${tieBreaker} > ${quotedTie}))`
+                : `${cursorColumn} > ${quotedCursor}`;
             filter = filter ? `${filter} AND ${cursorFilter}` : `WHERE ${cursorFilter}`;
         }
 
         const BATCH_LIMIT = 5000;
-        const offset = (batchNumber - 1) * BATCH_LIMIT;
 
         const sql = `
             SELECT * 
@@ -191,13 +196,12 @@ export async function handleSync(
             LIMIT ${BATCH_LIMIT}
         `;
 
-        logger.info('DATA_FETCH', `Fetching batch ${batchNumber}`, { limit: BATCH_LIMIT, offset });
+        logger.info('DATA_FETCH', `Fetching batch ${batchNumber}`, { limit: BATCH_LIMIT });
         const data = await bq.queryPaginated<any>(job.bigquery.projectId, sql);
         logger.success('DATA_FETCH', `Batch ${batchNumber} fetched`, { 
             count: data.length,
             batchLimit: BATCH_LIMIT,
-            hasMore: data.length === BATCH_LIMIT,
-            offset 
+            hasMore: data.length === BATCH_LIMIT
         });
 
         if (data.length > 0) {
@@ -212,7 +216,10 @@ export async function handleSync(
         let lastCursor: { [key: string]: any } | undefined = undefined;
         if (data.length > 0) {
             const lastRow = data[data.length - 1];
-            lastCursor = { [cursorColumn]: lastRow[cursorColumn] };
+            lastCursor = { 
+                [cursorColumn]: lastRow[cursorColumn],
+                [tieBreaker]: lastRow[tieBreaker]
+            };
         }
 
         totalRows += data.length;
