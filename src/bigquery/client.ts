@@ -59,7 +59,12 @@ export class BigQueryClient {
                     switch (field.type) {
                         case 'INTEGER':
                         case 'INT64':
-                            obj[field.name] = parseInt(val, 10);
+                            // Keep large integers as strings to avoid JavaScript precision loss
+                            // Numbers > MAX_SAFE_INTEGER (9007199254740991) lose precision with parseInt
+                            const numVal = BigInt(val);
+                            obj[field.name] = numVal > Number.MAX_SAFE_INTEGER || numVal < Number.MIN_SAFE_INTEGER
+                                ? val  // Keep as string
+                                : parseInt(val, 10);  // Safe to convert
                             break;
                         case 'FLOAT':
                         case 'FLOAT64':
