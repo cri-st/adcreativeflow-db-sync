@@ -237,6 +237,9 @@ async function saveJob(e) {
             datasetId: document.getElementById('bq-dataset').value,
             tableOrView: document.getElementById('bq-table').value,
             incrementalColumn: document.getElementById('bq-column').value || undefined,
+            forceStringFields: document.getElementById('bq-force-string').value
+                ? document.getElementById('bq-force-string').value.split(',').map(s => s.trim()).filter(Boolean)
+                : undefined,
         },
         supabase: {
             tableName: document.getElementById('sb-table').value,
@@ -373,6 +376,7 @@ function editJob(id) {
     document.getElementById('bq-dataset').value = job.bigquery.datasetId;
     document.getElementById('bq-table').value = job.bigquery.tableOrView;
     document.getElementById('bq-column').value = job.bigquery.incrementalColumn || '';
+    document.getElementById('bq-force-string').value = (job.bigquery.forceStringFields || []).join(', ');
     const warning = document.getElementById('incremental-warning');
     if (job.bigquery.incrementalColumn) {
         warning.classList.add('hidden');

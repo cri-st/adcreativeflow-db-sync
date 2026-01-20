@@ -21,6 +21,7 @@ export interface SyncJobConfig {
         datasetId: string;
         tableOrView: string;
         incrementalColumn?: string;
+        forceStringFields?: string[];
     };
 
     supabase: {
@@ -197,7 +198,7 @@ export async function handleSync(
         `;
 
         logger.info('DATA_FETCH', `Fetching batch ${batchNumber}`, { limit: BATCH_LIMIT });
-        const data = await bq.queryPaginated<any>(job.bigquery.projectId, sql);
+        const data = await bq.queryPaginated<any>(job.bigquery.projectId, sql, job.bigquery.forceStringFields);
         logger.success('DATA_FETCH', `Batch ${batchNumber} fetched`, { 
             count: data.length,
             batchLimit: BATCH_LIMIT,

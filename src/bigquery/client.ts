@@ -46,8 +46,9 @@ export class BigQueryClient {
         return this.accessToken;
     }
 
-    private parseRows<T>(schema: { fields: any[] }, rows: any[] | undefined): T[] {
+    private parseRows<T>(schema: { fields: any[] }, rows: any[] | undefined, forceStringFields?: string[]): T[] {
         if (!rows) return [];
+        const forceSet = new Set(forceStringFields || []);
 
         return rows.map((row: any) => {
             const obj: any = {};
@@ -55,6 +56,8 @@ export class BigQueryClient {
                 const val = row.f[i].v;
                 if (val === null) {
                     obj[field.name] = null;
+                } else if (forceSet.has(field.name)) {
+                    obj[field.name] = val;
                 } else {
                     switch (field.type) {
                         case 'INTEGER':
@@ -79,7 +82,7 @@ export class BigQueryClient {
         });
     }
 
-    async query<T>(projectId: string, sql: string): Promise<T[]> {
+    async query<T>(projectId: string, sql: string, forceStringFields?: string[]): Promise<T[]> {
         const token = await this.getAccessToken();
         const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/queries`;
 
@@ -100,10 +103,10 @@ export class BigQueryClient {
             throw new Error(`BigQuery Error: ${data.error.message}`);
         }
 
-        return this.parseRows<T>(data.schema, data.rows);
+        return this.parseRows<T>(data.schema, data.rows, forceStringFields);
     }
 
-    async queryPaginated<T>(projectId: string, sql: string): Promise<T[]> {
+    async queryPaginated<T>(projectId: string, sql: string, forceStringFields?: string[]): Promise<T[]> {
         const token = await this.getAccessToken();
         const baseUrl = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/queries`;
 
@@ -134,7 +137,7 @@ export class BigQueryClient {
         const totalRows = parseInt(initialData.totalRows || '0', 10);
         const estimatedPages = totalRows > 0 ? Math.ceil(totalRows / 5000) : 1;
 
-        const allRows: T[] = this.parseRows<T>(schema, initialData.rows);
+        const allRows: T[] = this.parseRows<T>(schema, initialData.rows, forceStringFields);
         let pageToken = initialData.pageToken;
         let pageNumber = 1;
 
@@ -155,7 +158,7 @@ export class BigQueryClient {
                 throw new Error(`BigQuery Pagination Error: ${pageData.error.message}`);
             }
 
-            const pageRows = this.parseRows<T>(schema, pageData.rows);
+            const pageRows = this.parseRows<T>(schema, pageData.rows, forceStringFields);
             allRows.push(...pageRows);
             pageToken = pageData.pageToken;
 

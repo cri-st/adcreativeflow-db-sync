@@ -100,6 +100,13 @@
                                 ⚠️ FULL REFRESH MODE - Without an incremental column, ALL data will be fetched on every sync. This is recommended only for small tables.
                             </div>
                         </div>
+                        <div class="form-group">
+                            <label>Force String Fields (Comma separated)</label>
+                            <input type="text" id="bq-force-string" class="input-field" placeholder="ad_id,campaign_id,account_id">
+                            <div class="incremental-warning" style="display: block; color: var(--text-secondary); font-size: 0.7rem;">
+                                Columns that should always be kept as strings (prevents precision loss for large IDs)
+                            </div>
+                        </div>
                     </div>
 
                     <div class="section-column">
