@@ -1,5 +1,9 @@
 import { Hono } from 'hono';
+import { BigQueryClient } from './bigquery/client';
 import { handleSync, SyncJobConfig, SyncResult } from './sync/handler';
+import { handleSheetsToBigQuerySync } from './sync/sheets-to-bq-handler';
+import { SheetsClient } from './sheets/client';
+import { SHEETS_WHITELIST, SheetsSyncConfig } from './types/funnel';
 import { Logger } from './logger';
 
 export interface Env {
@@ -49,6 +53,28 @@ app.get('/api/configs', async (c) => {
 
 app.post('/api/configs', async (c) => {
 	const job: SyncJobConfig = await c.req.json();
+	
+	if (job.type === 'sheets-to-bq') {
+		const sheetsJob = job as any;
+		if (sheetsJob.sheets?.spreadsheetUrl) {
+			const match = sheetsJob.sheets.spreadsheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+			if (!match || !match[1]) {
+				return c.json({ error: 'Invalid spreadsheet URL' }, 400);
+			}
+			if (!sheetsJob.sheets) sheetsJob.sheets = {};
+			sheetsJob.sheets.spreadsheetId = match[1];
+		}
+
+		if (sheetsJob.sheets?.sheetName) {
+			if (!SHEETS_WHITELIST.includes(sheetsJob.sheets.sheetName)) {
+				return c.json({ error: 'Invalid sheet name. Allowed: ' + SHEETS_WHITELIST.join(', ') }, 400);
+			}
+			if (!sheetsJob.sheets.range) {
+				sheetsJob.sheets.range = sheetsJob.sheets.sheetName;
+			}
+		}
+	}
+
 	if (!job.id) job.id = crypto.randomUUID();
 	await c.env.SYNC_CONFIGS.put(`job:${job.id}`, JSON.stringify(job));
 	return c.json({ success: true, job });
@@ -57,6 +83,28 @@ app.post('/api/configs', async (c) => {
 app.put('/api/configs/:id', async (c) => {
 	const id = c.req.param('id');
 	const job: SyncJobConfig = await c.req.json();
+
+	if (job.type === 'sheets-to-bq') {
+		const sheetsJob = job as any;
+		if (sheetsJob.sheets?.spreadsheetUrl) {
+			const match = sheetsJob.sheets.spreadsheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+			if (!match || !match[1]) {
+				return c.json({ error: 'Invalid spreadsheet URL' }, 400);
+			}
+			if (!sheetsJob.sheets) sheetsJob.sheets = {};
+			sheetsJob.sheets.spreadsheetId = match[1];
+		}
+
+		if (sheetsJob.sheets?.sheetName) {
+			if (!SHEETS_WHITELIST.includes(sheetsJob.sheets.sheetName)) {
+				return c.json({ error: 'Invalid sheet name. Allowed: ' + SHEETS_WHITELIST.join(', ') }, 400);
+			}
+			if (!sheetsJob.sheets.range) {
+				sheetsJob.sheets.range = sheetsJob.sheets.sheetName;
+			}
+		}
+	}
+
 	await c.env.SYNC_CONFIGS.put(`job:${id}`, JSON.stringify(job));
 	return c.json({ success: true });
 });
@@ -65,6 +113,33 @@ app.delete('/api/configs/:id', async (c) => {
 	const id = c.req.param('id');
 	await c.env.SYNC_CONFIGS.delete(`job:${id}`);
 	return c.json({ success: true });
+});
+
+app.post('/api/diagnostics/sheets', async (c) => {
+	const body = await c.req.json().catch(() => ({}));
+	const { spreadsheetUrl, sheetName } = body;
+	
+	if (!spreadsheetUrl) return c.json({ error: 'Missing spreadsheetUrl' }, 400);
+
+	let spreadsheetId = spreadsheetUrl;
+	const match = spreadsheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+	if (match && match[1]) {
+		spreadsheetId = match[1];
+	}
+
+	try {
+		const client = new SheetsClient(c.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+		const range = sheetName ? `${sheetName}!1:1` : 'A1:Z1';
+		const rows = await client.getSheetRange(spreadsheetId, range);
+		
+		return c.json({ 
+			success: true, 
+			message: 'Sheet accessible', 
+			preview: rows ? rows[0] : [] 
+		});
+	} catch (err: any) {
+		return c.json({ error: err.message }, 500);
+	}
 });
 
 app.get('/api/logs/:jobId', async (c) => {
@@ -131,6 +206,36 @@ app.post('/api/sync/all', async (c) => {
 	return c.json(results);
 });
 
+
+app.post('/test-bq-load', async (c) => {
+	const body = await c.req.json().catch(() => ({}));
+	let { projectId, datasetId, tableId, data, serviceAccountJson } = body;
+
+    projectId = projectId || c.env.GOOGLE_PROJECT_ID;
+    const sa = serviceAccountJson ? JSON.stringify(serviceAccountJson) : c.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+
+	if (!projectId || !datasetId || !tableId || !data) {
+		return c.json({ error: 'Missing required fields: projectId, datasetId, tableId, data' }, 400);
+	}
+
+    if (!sa) {
+        return c.json({ error: 'Missing GOOGLE_SERVICE_ACCOUNT_JSON env var and not provided in body' }, 500);
+    }
+
+	if (!Array.isArray(data)) {
+		return c.json({ error: 'Data must be an array of objects' }, 400);
+	}
+
+	try {
+		const ndjson = data.map((item: any) => JSON.stringify(item)).join('\n');
+		const client = new BigQueryClient(sa);
+		const job = await client.loadFromJson(projectId, datasetId, tableId, ndjson, true);
+		return c.json({ success: true, job });
+	} catch (err: any) {
+		return c.json({ success: false, error: err.message }, 500);
+	}
+});
+
 app.get('*', async (c) => {
 	return await c.env.ASSETS.fetch(c.req.raw);
 });
@@ -150,11 +255,50 @@ async function runJobWithAutoContinuation(
 		if (!env.SUPABASE_SERVICE_KEY) throw new Error('SUPABASE_SERVICE_KEY is missing.');
 		if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is missing.');
 
-		const result: SyncResult = await handleSync({
+		const auth = {
 			googleServiceAccount: env.GOOGLE_SERVICE_ACCOUNT_JSON,
 			supabaseUrl: env.SUPABASE_URL,
 			supabaseKey: env.SUPABASE_SERVICE_KEY
-		}, job, currentRunId, env.SYNC_LOGS, batchNumber);
+		};
+
+		let result: SyncResult;
+
+		if (job.type === 'sheets-to-bq') {
+			const sheetJob = job as any;
+			const rawSheetName = sheetJob.sheets.sheetName || sheetJob.sheets.range || '';
+			const actualSheetName = rawSheetName.includes('!') ? rawSheetName.split('!')[0] : rawSheetName;
+
+			const handlerJob = {
+				id: sheetJob.id,
+				name: sheetJob.name,
+				enabled: sheetJob.enabled,
+				source: {
+					spreadsheetId: sheetJob.sheets.spreadsheetId,
+					sheetName: actualSheetName
+				},
+				destination: {
+					projectId: sheetJob.bigquery.projectId,
+					datasetId: sheetJob.bigquery.datasetId,
+					tableId: sheetJob.bigquery.tableId
+				}
+			};
+
+			result = await handleSheetsToBigQuerySync(
+				auth,
+				handlerJob as any,
+				currentRunId,
+				env.SYNC_LOGS,
+				batchNumber
+			);
+		} else {
+			result = await handleSync(
+				auth,
+				job,
+				currentRunId,
+				env.SYNC_LOGS,
+				batchNumber
+			);
+		}
 
 		if (!result.hasMore) {
 			job.lastRun = new Date().toISOString();
