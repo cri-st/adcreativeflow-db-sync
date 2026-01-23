@@ -165,7 +165,8 @@ async function runJobWithAutoContinuation(
 				const { totalRows, totalBatches, durationMs } = result.stats;
 				const minutes = Math.floor(durationMs / 60000);
 				const seconds = Math.floor((durationMs % 60000) / 1000);
-				job.lastSummary = `${totalRows.toLocaleString()} rows in ${totalBatches} batches (${minutes}m ${seconds}s)`;
+				const deletePart = result.rowsDeleted > 0 ? `, ${result.rowsDeleted.toLocaleString()} deleted` : '';
+				job.lastSummary = `${totalRows.toLocaleString()} rows synced${deletePart} in ${minutes}m ${seconds}s`;
 			}
             
 			await env.SYNC_CONFIGS.put(`job:${job.id}`, JSON.stringify(job));

@@ -45,6 +45,7 @@ export interface SyncResult {
     hasMore: boolean;
     nextBatch: number;
     rowsProcessed: number;
+    rowsDeleted: number;
     stats?: {
         totalRows: number;
         totalBatches: number;
@@ -60,6 +61,103 @@ interface SyncState {
     startTime: number;
     schemaSyncDone?: boolean;
     lastCursor?: { [key: string]: any };
+}
+
+/**
+ * Serialize row keys for Set comparison
+ */
+function serializeKey(row: any, columns: string[]): string {
+    return JSON.stringify(columns.map(col => row[col]));
+}
+
+/**
+ * Detect and delete rows that exist in Supabase but not in BigQuery
+ * @returns Number of rows deleted
+ */
+async function detectAndDeleteRemovedRows(
+    bq: BigQueryClient,
+    sb: SupabaseClient,
+    job: SyncJobConfig,
+    logger: Logger
+): Promise<number> {
+    const { upsertColumns } = job.supabase;
+    const { projectId, datasetId, tableOrView } = job.bigquery;
+    
+    logger.info('DELETE_DETECTION', 'Starting delete detection phase');
+
+    // Phase 1: Fetch all IDs from BigQuery (full table, ignore incrementalColumn)
+    const bqIdQuery = `
+        SELECT ${upsertColumns.join(', ')} 
+        FROM \`${projectId}.${datasetId}.${tableOrView}\`
+    `;
+    
+    logger.info('DELETE_DETECTION', 'Fetching BigQuery IDs', { columns: upsertColumns });
+    const bqRows = await bq.queryPaginated<any>(projectId, bqIdQuery);
+    
+    // Circuit breaker: Abort if BigQuery returns 0 rows
+    if (bqRows.length === 0) {
+        logger.warning('DELETE_DETECTION', 'BigQuery returned 0 rows - aborting delete detection to prevent accidental mass deletion');
+        return 0;
+    }
+    
+    logger.info('DELETE_DETECTION', 'BigQuery IDs fetched', { count: bqRows.length });
+
+    // Phase 1b: Fetch all IDs from Supabase (paginated)
+    const PAGE_SIZE = 10000;
+    const supabaseRows: any[] = [];
+    let page = 0;
+    let hasMorePages = true;
+    
+    while (hasMorePages) {
+        const query = `
+            SELECT ${upsertColumns.join(', ')} 
+            FROM "${job.supabase.tableName}" 
+            ORDER BY ${upsertColumns.join(', ')}
+            LIMIT ${PAGE_SIZE} OFFSET ${page * PAGE_SIZE}
+        `;
+        const pageData = await sb.executeQuery(query);
+        supabaseRows.push(...pageData);
+        hasMorePages = pageData.length === PAGE_SIZE;
+        page++;
+    }
+    
+    // Optimization: Skip if Supabase has 0 rows (first sync)
+    if (supabaseRows.length === 0) {
+        logger.info('DELETE_DETECTION', 'Supabase table is empty - skipping delete detection');
+        return 0;
+    }
+    
+    logger.info('DELETE_DETECTION', 'Supabase IDs fetched', { count: supabaseRows.length });
+
+    // Phase 2: Compare using Sets
+    const bqSet = new Set(bqRows.map(row => serializeKey(row, upsertColumns)));
+    
+    const idsToDelete = supabaseRows.filter(row => !bqSet.has(serializeKey(row, upsertColumns)));
+    
+    // Circuit breaker: Abort if deletes > 50% of Supabase rows
+    if (idsToDelete.length > supabaseRows.length * 0.5) {
+        const errorMsg = `Delete detection aborted: ${idsToDelete.length} rows to delete exceeds 50% of ${supabaseRows.length} Supabase rows`;
+        logger.error('DELETE_DETECTION', errorMsg);
+        throw new Error(errorMsg);
+    }
+    
+    if (idsToDelete.length === 0) {
+        logger.info('DELETE_DETECTION', 'No rows to delete');
+        return 0;
+    }
+    
+    logger.info('DELETE_DETECTION', 'Rows identified for deletion', { count: idsToDelete.length });
+
+    // Phase 3: Delete in batches
+    const deletePayload = idsToDelete.map(row => 
+        upsertColumns.map(col => row[col])
+    );
+    
+    const deletedCount = await sb.deleteRows(job.supabase.tableName, upsertColumns, deletePayload);
+    
+    logger.success('DELETE_DETECTION', 'Delete phase complete', { rowsDeleted: deletedCount });
+    
+    return deletedCount;
 }
 
 export async function handleSync(
@@ -238,6 +336,14 @@ export async function handleSync(
         });
 
         if (!hasMore) {
+            let rowsDeleted = 0;
+            try {
+                rowsDeleted = await detectAndDeleteRemovedRows(bq, sb, job, logger);
+            } catch (deleteError: any) {
+                logger.error('DELETE_DETECTION', 'Delete detection failed', { error: deleteError.message });
+                throw deleteError;
+            }
+            
             const durationMs = Date.now() - startTime;
             const minutes = Math.floor(durationMs / 60000);
             const seconds = Math.floor((durationMs % 60000) / 1000);
@@ -246,6 +352,7 @@ export async function handleSync(
             logger.success('SYNC_COMPLETE', 'Job finished successfully', { 
                 totalBatches: batchNumber, 
                 totalRows,
+                rowsDeleted,
                 duration: durationStr
             });
             
@@ -256,6 +363,7 @@ export async function handleSync(
                 hasMore, 
                 nextBatch: batchNumber + 1, 
                 rowsProcessed: data.length,
+                rowsDeleted,
                 stats: {
                     totalRows,
                     totalBatches: batchNumber,
@@ -274,7 +382,7 @@ export async function handleSync(
             }), { expirationTtl: 86400 });
 
             logger.success('BATCH_COMPLETE', `Batch ${batchNumber} completed. Proceeding to next batch.`);
-            return { hasMore, nextBatch: batchNumber + 1, rowsProcessed: data.length, logs: logger.getLogs() };
+            return { hasMore, nextBatch: batchNumber + 1, rowsProcessed: data.length, rowsDeleted: 0, logs: logger.getLogs() };
         }
 
     } catch (err: any) {

@@ -84,4 +84,58 @@ export class SupabaseClient {
                 type: mapPostgresToBigQueryType(row.data_type)
             }));
     }
+
+    /**
+     * Delete rows from a table by ID columns
+     * @param tableName - Target table name
+     * @param idColumns - Array of column names that form the unique key
+     * @param idsToDelete - Array of row identifiers (each is an array of values matching idColumns order)
+     */
+    async deleteRows(tableName: string, idColumns: string[], idsToDelete: any[][]): Promise<number> {
+        if (idsToDelete.length === 0) return 0;
+
+        const DELETE_BATCH_SIZE = 200;
+        let totalDeleted = 0;
+
+        for (let i = 0; i < idsToDelete.length; i += DELETE_BATCH_SIZE) {
+            const batch = idsToDelete.slice(i, i + DELETE_BATCH_SIZE);
+
+            if (idColumns.length === 1) {
+                // Single column: use .in() filter
+                const column = idColumns[0];
+                const values = batch.map(row => row[0]);
+                const { error, count } = await this.client
+                    .from(tableName)
+                    .delete({ count: 'exact' })
+                    .in(column, values);
+
+                if (error) {
+                    throw new Error(`Failed to delete rows from ${tableName}: ${error.message}`);
+                }
+                totalDeleted += count || 0;
+            } else {
+                // Composite key: use .or() with multiple conditions
+                const orConditions = batch.map(row => {
+                    const conditions = idColumns.map((col, idx) => {
+                        const value = row[idx];
+                        const escapedValue = typeof value === 'string' ? value.replace(/'/g, "''") : value;
+                        return `${col}.eq.${escapedValue}`;
+                    }).join(',');
+                    return `and(${conditions})`;
+                }).join(',');
+
+                const { error, count } = await this.client
+                    .from(tableName)
+                    .delete({ count: 'exact' })
+                    .or(orConditions);
+
+                if (error) {
+                    throw new Error(`Failed to delete rows from ${tableName}: ${error.message}`);
+                }
+                totalDeleted += count || 0;
+            }
+        }
+
+        return totalDeleted;
+    }
 }
