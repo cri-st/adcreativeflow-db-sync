@@ -185,4 +185,75 @@ export class BigQueryClient {
 
         return data;
     }
+
+    async loadFromJson(projectId: string, datasetId: string, tableId: string, ndjson: string, append: boolean = true): Promise<any> {
+        const token = await this.getAccessToken();
+        const url = `https://bigquery.googleapis.com/upload/bigquery/v2/projects/${projectId}/jobs?uploadType=multipart`;
+        const boundary = 'XXXXXXXXXX';
+
+        const metadata = {
+            configuration: {
+                load: {
+                    destinationTable: {
+                        projectId,
+                        datasetId,
+                        tableId
+                    },
+                    sourceFormat: 'NEWLINE_DELIMITED_JSON',
+                    writeDisposition: append ? 'WRITE_APPEND' : 'WRITE_TRUNCATE',
+                    autodetect: true
+                }
+            }
+        };
+
+        const body = `--${boundary}
+Content-Type: application/json; charset=UTF-8
+
+${JSON.stringify(metadata)}
+
+--${boundary}
+Content-Type: application/json
+
+${ndjson}
+
+--${boundary}--`;
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': `multipart/related; boundary=${boundary}`
+            },
+            body: body
+        });
+
+        const data: any = await response.json();
+        if (data.error) {
+            throw new Error(`BigQuery Load Error: ${data.error.message}`);
+        }
+
+        const jobId = data.jobReference.jobId;
+        return this.pollJob(projectId, jobId);
+    }
+
+    private async pollJob(projectId: string, jobId: string): Promise<any> {
+        const token = await this.getAccessToken();
+        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/jobs/${jobId}`;
+
+        while (true) {
+            const response = await fetch(url, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const data: any = await response.json();
+
+            if (data.status.state === 'DONE') {
+                if (data.status.errorResult) {
+                    throw new Error(`BigQuery Job Failed: ${data.status.errorResult.message}`);
+                }
+                return data;
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
 }

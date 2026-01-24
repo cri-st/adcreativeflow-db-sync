@@ -1,0 +1,172 @@
+import { BigQueryClient } from '../bigquery/client';
+import { SheetsClient } from '../sheets/client';
+import { Logger, LogEntry } from '../logger';
+import { GlobalAuth, SyncResult } from './handler';
+import { SheetsSyncConfig } from '../types/funnel';
+
+interface SheetsSyncState {
+    lastProcessedRow: number;
+    totalRows: number;
+    headers: string[];
+    startTime: number;
+}
+
+function sanitizeColumnName(name: string): string {
+    return name
+        .trim()
+        .replace(/[^a-zA-Z0-9_]/g, '_')
+        .replace(/^{0-9}/, '_$&');
+}
+
+export async function handleSheetsToBigQuerySync(
+    auth: GlobalAuth,
+    job: SheetsSyncConfig,
+    runId: string,
+    kvNamespace: KVNamespace,
+    batchNumber: number = 1
+): Promise<SyncResult> {
+    const logger = new Logger(job.id, job.name, runId);
+    
+    if (batchNumber === 1) {
+        await logger.startRun(kvNamespace);
+    }
+
+    try {
+        const sheets = new SheetsClient(auth.googleServiceAccount);
+        const bq = new BigQueryClient(auth.googleServiceAccount);
+        const stateKey = `sheets_sync_state:${job.id}:${runId}`;
+        
+        let startRow = 2;
+        let headers: string[] = [];
+        let startTime = Date.now();
+        let totalRows = 0;
+
+        const sheetName = job.sheets.range;
+
+        if (batchNumber === 1) {
+            logger.info('SYNC_START', 'Starting Sheets to BigQuery sync', { 
+                source: job.sheets, 
+                destination: job.bigquery 
+            });
+
+            logger.info('HEADERS', 'Fetching sheet headers');
+            const headerRows = await sheets.getSheetRange(job.sheets.spreadsheetId, `${sheetName}!1:1`);
+            
+            if (!headerRows || headerRows.length === 0 || !headerRows[0] || headerRows[0].length === 0) {
+                throw new Error('Sheet is empty or missing headers in row 1');
+            }
+
+            headers = headerRows[0].map(h => sanitizeColumnName(h.toString()));
+            logger.info('HEADERS', 'Headers found', { count: headers.length, headers });
+
+            await kvNamespace.put(stateKey, JSON.stringify({
+                lastProcessedRow: 1,
+                totalRows: 0,
+                headers,
+                startTime
+            }), { expirationTtl: 86400 });
+
+        } else {
+            logger.info('BATCH_START', `Starting batch ${batchNumber}`);
+            const state = await kvNamespace.get<SheetsSyncState>(stateKey, 'json');
+            
+            if (!state) {
+                throw new Error(`Sync state not found for runId ${runId} (batch ${batchNumber}). The run may have expired.`);
+            }
+
+            startRow = state.lastProcessedRow + 1;
+            headers = state.headers;
+            startTime = state.startTime;
+            totalRows = state.totalRows;
+        }
+
+        const BATCH_SIZE = 5000;
+        const endRow = startRow + BATCH_SIZE - 1;
+        const range = `${sheetName}!${startRow}:${endRow}`;
+
+        logger.info('DATA_FETCH', `Fetching batch rows ${startRow} to ${endRow}`);
+        const rows = await sheets.getSheetRange(job.sheets.spreadsheetId, range);
+        
+        const rowCount = rows ? rows.length : 0;
+        logger.info('DATA_FETCH', 'Rows fetched', { count: rowCount });
+
+        let rowsProcessedInBatch = 0;
+
+        if (rowCount > 0) {
+            const ndjsonLines = rows.map(row => {
+                const obj: any = {};
+                headers.forEach((header, index) => {
+                    const val = row[index];
+                    obj[header] = (val === undefined || val === '') ? null : val;
+                });
+                return JSON.stringify(obj);
+            });
+
+            const ndjson = ndjsonLines.join('\n');
+            const writeDisposition = batchNumber === 1 ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
+
+            logger.info('BQ_LOAD', `Loading ${rowCount} rows to BigQuery`, { writeDisposition });
+            
+            await bq.loadFromJson(
+                job.bigquery.projectId,
+                job.bigquery.datasetId,
+                job.bigquery.tableId,
+                ndjson,
+                writeDisposition === 'WRITE_APPEND'
+            );
+
+            rowsProcessedInBatch = rowCount;
+            totalRows += rowCount;
+        }
+
+        const hasMore = rowCount === BATCH_SIZE;
+        const nextStartRow = startRow + rowCount;
+
+        if (hasMore) {
+            await kvNamespace.put(stateKey, JSON.stringify({
+                lastProcessedRow: nextStartRow - 1,
+                totalRows,
+                headers,
+                startTime
+            }), { expirationTtl: 86400 });
+            
+            logger.success('BATCH_COMPLETE', `Batch ${batchNumber} complete`, { 
+                rowsProcessed: rowsProcessedInBatch,
+                totalRowsSoFar: totalRows,
+                nextBatch: batchNumber + 1 
+            });
+        } else {
+            const durationMs = Date.now() - startTime;
+            const minutes = Math.floor(durationMs / 60000);
+            const seconds = Math.floor((durationMs % 60000) / 1000);
+            const durationStr = `${minutes}m ${seconds}s`;
+
+            logger.success('SYNC_COMPLETE', 'Sheets sync job finished successfully', {
+                totalBatches: batchNumber,
+                totalRows,
+                duration: durationStr
+            });
+
+            await logger.endRun(kvNamespace, 'success');
+            await kvNamespace.delete(stateKey);
+        }
+
+        return {
+            hasMore,
+            nextBatch: batchNumber + 1,
+            rowsProcessed: rowsProcessedInBatch,
+            rowsDeleted: 0,
+            stats: {
+                totalRows,
+                totalBatches: batchNumber,
+                durationMs: Date.now() - startTime
+            },
+            logs: logger.getLogs()
+        };
+
+    } catch (err: any) {
+        logger.error('SYNC_ERROR', 'Sheets sync failed', { error: err.message, stack: err.stack?.substring(0, 500) });
+        await logger.endRun(kvNamespace, 'error');
+        throw err;
+    }
+}

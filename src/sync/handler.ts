@@ -1,6 +1,8 @@
 import { BigQueryClient } from '../bigquery/client';
 import { SupabaseClient } from '../supabase/client';
 import { Logger, truncateSql, LogEntry } from '../logger';
+import { SyncJobConfig, BigQuerySyncConfig } from '../types/funnel';
+export type { SyncJobConfig, BigQuerySyncConfig };
 import { 
     generateAddColumnsSQL, 
     generateCreateTableSQL, 
@@ -10,30 +12,6 @@ import {
     validateUpsertColumns,
     buildUpsertValidationError 
 } from './schema';
-
-export interface SyncJobConfig {
-    id: string;
-    name: string;
-    enabled: boolean;
-
-    bigquery: {
-        projectId: string;
-        datasetId: string;
-        tableOrView: string;
-        incrementalColumn?: string;
-        forceStringFields?: string[];
-    };
-
-    supabase: {
-        tableName: string;
-        upsertColumns: string[];
-    };
-
-    lastRun?: string;
-    lastStatus?: 'success' | 'error';
-    lastError?: string;
-    lastSummary?: string;
-}
 
 export interface GlobalAuth {
     googleServiceAccount: string;
@@ -77,7 +55,7 @@ function serializeKey(row: any, columns: string[]): string {
 async function detectAndDeleteRemovedRows(
     bq: BigQueryClient,
     sb: SupabaseClient,
-    job: SyncJobConfig,
+    job: BigQuerySyncConfig,
     logger: Logger
 ): Promise<number> {
     const { upsertColumns } = job.supabase;
@@ -170,11 +148,19 @@ export async function handleSync(
     const logger = new Logger(job.id, job.name, runId);
     await logger.startRun(kvNamespace);
 
+    if (job.type === 'sheets-to-bq') {
+        logger.error('SYNC_ERROR', 'Sheets sync not supported in this handler');
+        await logger.endRun(kvNamespace, 'error');
+        throw new Error('Sheets sync not supported in this handler');
+    }
+
+    const bqJob = job as BigQuerySyncConfig;
+
     try {
         const bq = new BigQueryClient(auth.googleServiceAccount);
         const sb = new SupabaseClient(auth.supabaseUrl, auth.supabaseKey);
 
-        const stateKey = `sync_state:${job.id}:${runId}`;
+        const stateKey = `sync_state:${bqJob.id}:${runId}`;
         let lastSyncDate: string | null = null;
         let bqFields: SchemaField[] = [];
         let totalRows = 0;
@@ -182,33 +168,33 @@ export async function handleSync(
         let loadedCursor: { [key: string]: any } | undefined = undefined;
 
         if (batchNumber === 1) {
-            logger.info('SYNC_START', 'Starting sync', { bigquery: job.bigquery, supabase: job.supabase });
+            logger.info('SYNC_START', 'Starting sync', { bigquery: bqJob.bigquery, supabase: bqJob.supabase });
 
-            logger.info('SCHEMA_SYNC', 'Fetching BigQuery metadata', { table: job.bigquery.tableOrView });
-            const bqMetadata = await bq.getTableMetadata(job.bigquery.projectId, job.bigquery.datasetId, job.bigquery.tableOrView);
+            logger.info('SCHEMA_SYNC', 'Fetching BigQuery metadata', { table: bqJob.bigquery.tableOrView });
+            const bqMetadata = await bq.getTableMetadata(bqJob.bigquery.projectId, bqJob.bigquery.datasetId, bqJob.bigquery.tableOrView);
             bqFields = bqMetadata.schema.fields;
 
-            logger.info('SCHEMA_SYNC', 'Ensuring Supabase table exists', { tableName: job.supabase.tableName });
-            const createSql = generateCreateTableSQL(job.supabase.tableName, bqFields, job.supabase.upsertColumns);
+            logger.info('SCHEMA_SYNC', 'Ensuring Supabase table exists', { tableName: bqJob.supabase.tableName });
+            const createSql = generateCreateTableSQL(bqJob.supabase.tableName, bqFields, bqJob.supabase.upsertColumns);
             await sb.executeRawSQL(createSql);
 
-            const validation = validateUpsertColumns(job.supabase.upsertColumns, bqFields);
+            const validation = validateUpsertColumns(bqJob.supabase.upsertColumns, bqFields);
             if (!validation.valid) {
                 throw new Error(buildUpsertValidationError(validation.invalidColumns));
             }
 
-            const supabaseSchema = await sb.getTableSchema(job.supabase.tableName);
+            const supabaseSchema = await sb.getTableSchema(bqJob.supabase.tableName);
             const schemaChanges = detectSchemaChanges(bqFields, supabaseSchema);
 
             if (schemaChanges.columnsToAdd.length > 0) {
                 logger.success('SCHEMA_SYNC', 'Adding new columns', { count: schemaChanges.columnsToAdd.length, columns: schemaChanges.columnsToAdd.map(c => c.name) });
-                const addSql = generateAddColumnsSQL(job.supabase.tableName, schemaChanges.columnsToAdd);
+                const addSql = generateAddColumnsSQL(bqJob.supabase.tableName, schemaChanges.columnsToAdd);
                 await sb.executeRawSQL(addSql);
             }
 
             if (schemaChanges.columnsToDrop.length > 0) {
                 logger.warning('SCHEMA_SYNC', 'Dropping obsolete columns', { count: schemaChanges.columnsToDrop.length, columns: schemaChanges.columnsToDrop });
-                const dropSql = generateDropColumnsSQL(job.supabase.tableName, schemaChanges.columnsToDrop);
+                const dropSql = generateDropColumnsSQL(bqJob.supabase.tableName, schemaChanges.columnsToDrop);
                 await sb.executeRawSQL(dropSql);
             }
 
@@ -218,9 +204,9 @@ export async function handleSync(
             }
 
             logger.info('INCREMENTAL', 'Determining last sync date');
-            if (job.bigquery.incrementalColumn) {
+            if (bqJob.bigquery.incrementalColumn) {
                 try {
-                    lastSyncDate = await sb.getLastSyncDateFromTable(job.supabase.tableName, job.bigquery.incrementalColumn);
+                    lastSyncDate = await sb.getLastSyncDateFromTable(bqJob.supabase.tableName, bqJob.bigquery.incrementalColumn);
                 } catch (e: any) {
                     logger.warning('INCREMENTAL', 'Could not fetch last sync date', { reason: e.message });
                 }
@@ -254,21 +240,21 @@ export async function handleSync(
 
         let filter = '';
         let orderBy = '';
-        const cursorColumn = job.bigquery.incrementalColumn || job.supabase.upsertColumns[0];
-        const tieBreaker = job.supabase.upsertColumns[0];
+        const cursorColumn = bqJob.bigquery.incrementalColumn || bqJob.supabase.upsertColumns[0];
+        const tieBreaker = bqJob.supabase.upsertColumns[0];
         
-        if (job.bigquery.incrementalColumn) {
+        if (bqJob.bigquery.incrementalColumn) {
             if (lastSyncDate) {
                 const incrementalField = bqFields.find(
-                    f => f.name.toLowerCase() === job.bigquery.incrementalColumn!.toLowerCase()
+                    f => f.name.toLowerCase() === bqJob.bigquery.incrementalColumn!.toLowerCase()
                 );
                 const operator = '>';
-                filter = `WHERE ${job.bigquery.incrementalColumn} ${operator} '${lastSyncDate}'`;
+                filter = `WHERE ${bqJob.bigquery.incrementalColumn} ${operator} '${lastSyncDate}'`;
             }
-            orderBy = `ORDER BY ${job.bigquery.incrementalColumn} ASC, ${tieBreaker} ASC`;
+            orderBy = `ORDER BY ${bqJob.bigquery.incrementalColumn} ASC, ${tieBreaker} ASC`;
         } else {
-            if (job.supabase.upsertColumns.length > 0) {
-                orderBy = `ORDER BY ${job.supabase.upsertColumns.join(', ')} ASC`;
+            if (bqJob.supabase.upsertColumns.length > 0) {
+                orderBy = `ORDER BY ${bqJob.supabase.upsertColumns.join(', ')} ASC`;
             }
         }
 
@@ -289,14 +275,14 @@ export async function handleSync(
 
         const sql = `
             SELECT * 
-            FROM \`${job.bigquery.projectId}.${job.bigquery.datasetId}.${job.bigquery.tableOrView}\`
+            FROM \`${bqJob.bigquery.projectId}.${bqJob.bigquery.datasetId}.${bqJob.bigquery.tableOrView}\`
             ${filter}
             ${orderBy}
             LIMIT ${BATCH_LIMIT}
         `;
 
         logger.info('DATA_FETCH', `Fetching batch ${batchNumber}`, { limit: BATCH_LIMIT });
-        const data = await bq.queryPaginated<any>(job.bigquery.projectId, sql, job.bigquery.forceStringFields);
+        const data = await bq.queryPaginated<any>(bqJob.bigquery.projectId, sql, bqJob.bigquery.forceStringFields);
         logger.success('DATA_FETCH', `Batch ${batchNumber} fetched`, { 
             count: data.length,
             batchLimit: BATCH_LIMIT,
@@ -308,7 +294,7 @@ export async function handleSync(
             for (let j = 0; j < data.length; j += UPSERT_BATCH_SIZE) {
                 const upsertBatch = data.slice(j, j + UPSERT_BATCH_SIZE);
                 logger.debug('UPSERT', `Upserting sub-batch ${Math.floor(j/UPSERT_BATCH_SIZE)+1}`, { count: upsertBatch.length });
-                await sb.upsertTableData(job.supabase.tableName, upsertBatch, job.supabase.upsertColumns.join(','));
+                await sb.upsertTableData(bqJob.supabase.tableName, upsertBatch, bqJob.supabase.upsertColumns.join(','));
             }
         }
 
@@ -338,7 +324,7 @@ export async function handleSync(
         if (!hasMore) {
             let rowsDeleted = 0;
             try {
-                rowsDeleted = await detectAndDeleteRemovedRows(bq, sb, job, logger);
+                rowsDeleted = await detectAndDeleteRemovedRows(bq, sb, bqJob, logger);
             } catch (deleteError: any) {
                 logger.error('DELETE_DETECTION', 'Delete detection failed', { error: deleteError.message });
                 throw deleteError;

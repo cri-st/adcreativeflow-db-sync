@@ -28,3 +28,60 @@ export interface FunnelData {
     cvr_payment_to_purchase: number | null;
     cvr_global: number | null;
 }
+
+export interface BigQuerySyncConfig {
+    type?: 'bq-to-supabase';
+    id: string;
+    name: string;
+    enabled: boolean;
+
+    bigquery: {
+        projectId: string;
+        datasetId: string;
+        tableOrView: string;
+        incrementalColumn?: string;
+        forceStringFields?: string[];
+    };
+
+    supabase: {
+        tableName: string;
+        upsertColumns: string[];
+    };
+
+    lastRun?: string;
+    lastStatus?: 'success' | 'error';
+    lastError?: string;
+    lastSummary?: string;
+}
+
+export interface SheetsSyncConfig {
+    type: 'sheets-to-bq';
+    id: string;
+    name: string;
+    enabled: boolean;
+
+    sheets: {
+        spreadsheetId: string;
+        range: string;
+    };
+
+    bigquery: {
+        projectId: string;
+        datasetId: string;
+        tableId: string;
+        writeDisposition?: 'WRITE_TRUNCATE' | 'WRITE_APPEND' | 'WRITE_EMPTY';
+    };
+
+    lastRun?: string;
+    lastStatus?: 'success' | 'error';
+    lastError?: string;
+    lastSummary?: string;
+}
+
+export type SyncJobConfig = BigQuerySyncConfig | SheetsSyncConfig;
+
+export const SHEETS_WHITELIST: string[] = [
+    'Funnel Data',
+    'Ad Spend',
+    'Campaign Performance'
+];
