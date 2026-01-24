@@ -154,7 +154,8 @@ app.get('/api/logs/:jobId', async (c) => {
 
 	if (!runId) {
 		const runs = await Logger.getJobRuns(c.env.SYNC_LOGS, jobId);
-		return c.json({ exists: true, logs: [], runs });
+		const logs = limit <= 5 ? await Logger.getRecentLogs(c.env.SYNC_LOGS, jobId, undefined, limit) : [];
+		return c.json({ exists: true, logs, runs });
 	}
 
 	const logs = await Logger.getRecentLogs(c.env.SYNC_LOGS, jobId, runId, limit);
@@ -187,7 +188,7 @@ app.post('/api/sync/:id', async (c) => {
 	}
 });
 
-app.post('/api/sync/all', async (c) => {
+	app.post('/api/sync/all', async (c) => {
 	const list = await c.env.SYNC_CONFIGS.list({ prefix: 'job:' });
 	const results = [];
 	const origin = new URL(c.req.url).origin;
@@ -206,35 +207,27 @@ app.post('/api/sync/all', async (c) => {
 	return c.json(results);
 });
 
+app.get('/api/scheduled/sheets', async (c) => {
+	const list = await c.env.SYNC_CONFIGS.list({ prefix: 'job:' });
+	const results = [];
+	const origin = new URL(c.req.url).origin;
 
-app.post('/test-bq-load', async (c) => {
-	const body = await c.req.json().catch(() => ({}));
-	let { projectId, datasetId, tableId, data, serviceAccountJson } = body;
-
-    projectId = projectId || c.env.GOOGLE_PROJECT_ID;
-    const sa = serviceAccountJson ? JSON.stringify(serviceAccountJson) : c.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-
-	if (!projectId || !datasetId || !tableId || !data) {
-		return c.json({ error: 'Missing required fields: projectId, datasetId, tableId, data' }, 400);
+	for (const k of list.keys) {
+		const job = await c.env.SYNC_CONFIGS.get<SyncJobConfig>(k.name, 'json');
+		if (job && job.enabled && job.type === 'sheets-to-bq') {
+			try {
+				c.executionCtx.waitUntil(runJobWithAutoContinuation(c.env, job, c.executionCtx, undefined, 1, origin));
+				results.push({ id: job.id, status: 'triggered' });
+			} catch (err: any) {
+				results.push({ id: job.id, status: 'error', message: err.message });
+			}
+		}
 	}
-
-    if (!sa) {
-        return c.json({ error: 'Missing GOOGLE_SERVICE_ACCOUNT_JSON env var and not provided in body' }, 500);
-    }
-
-	if (!Array.isArray(data)) {
-		return c.json({ error: 'Data must be an array of objects' }, 400);
-	}
-
-	try {
-		const ndjson = data.map((item: any) => JSON.stringify(item)).join('\n');
-		const client = new BigQueryClient(sa);
-		const job = await client.loadFromJson(projectId, datasetId, tableId, ndjson, true);
-		return c.json({ success: true, job });
-	} catch (err: any) {
-		return c.json({ success: false, error: err.message }, 500);
-	}
+	return c.json({ success: true, results });
 });
+
+
+
 
 app.get('*', async (c) => {
 	return await c.env.ASSETS.fetch(c.req.raw);
@@ -331,10 +324,20 @@ export default {
 	fetch: app.fetch,
 	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
 		const list = await env.SYNC_CONFIGS.list({ prefix: 'job:' });
+		const cron = event.cron;
+
 		for (const k of list.keys) {
 			const job = await env.SYNC_CONFIGS.get<SyncJobConfig>(k.name, 'json');
 			if (job && job.enabled) {
-				ctx.waitUntil(runJobWithAutoContinuation(env, job, ctx));
+				const isSheetsJob = job.type === 'sheets-to-bq';
+				
+				if (cron === "30 */6 * * *" && isSheetsJob) {
+					ctx.waitUntil(runJobWithAutoContinuation(env, job, ctx));
+				} else if (cron === "0 */6 * * *" && !isSheetsJob) {
+					ctx.waitUntil(runJobWithAutoContinuation(env, job, ctx));
+				} else if (!cron) {
+					ctx.waitUntil(runJobWithAutoContinuation(env, job, ctx));
+				}
 			}
 		}
 	}
