@@ -15,6 +15,7 @@ const state = {
     syncCompleted: false,
     lastLogCount: 0,
     stablePolls: 0,
+    activeSyncs: new Map(),
 };
 
 const loginView = document.getElementById('login-view');
@@ -22,26 +23,21 @@ const dashboardView = document.getElementById('dashboard-view');
 const apiKeyInput = document.getElementById('api-key-input');
 const loginBtn = document.getElementById('login-btn');
 const loginError = document.getElementById('login-error');
-const jobsContainer = document.getElementById('jobs-container');
+const bqJobsContainer = document.getElementById('bq-jobs-container');
+const sheetsJobsContainer = document.getElementById('sheets-jobs-container');
 const logoutBtn = document.getElementById('logout-btn');
-const createBtn = document.getElementById('create-btn');
+const runAllBtn = document.getElementById('run-all-btn');
+const createBqBtn = document.getElementById('create-bq-btn');
+const createSheetsBtn = document.getElementById('create-sheets-btn');
 
 const jobModal = document.getElementById('job-modal');
 const jobForm = document.getElementById('job-form');
+const jobTypeInput = document.getElementById('job-type');
+const bqSection = document.getElementById('bq-supabase-section');
+const sheetsSection = document.getElementById('sheets-bq-section');
 const cancelModal = document.getElementById('cancel-modal');
 const modalTitle = document.getElementById('modal-title');
-
-const logModal = document.getElementById('log-modal');
-const logModalTitle = document.getElementById('log-modal-title');
-const logModalSubtitle = document.getElementById('log-modal-subtitle');
-const logModalClose = document.getElementById('log-modal-close');
-const logEntries = document.getElementById('log-entries');
-const logClearBtn = document.getElementById('log-clear-btn');
-const logDownloadBtn = document.getElementById('log-download-btn');
-const logFilters = document.querySelectorAll('.log-filter');
-const logDeletedBanner = document.getElementById('log-deleted-banner');
-const logErrorBanner = document.getElementById('log-error-banner');
-const logCompleteBanner = document.getElementById('log-complete-banner');
+const testSheetBtn = document.getElementById('test-sheet-btn');
 
 if (state.apiKey) {
     showDashboard();
@@ -179,60 +175,176 @@ function hasRecentErrors(jobId) {
 }
 
 function renderJobs() {
-    if (state.jobs.length === 0) {
-        jobsContainer.innerHTML = '<p class="mono" style="color: var(--text-secondary); text-align: center; padding: 40px;">NO SYNC JOBS CONFIGURED. CLICK ABOVE TO START.</p>';
-        return;
-    }
+    const bqJobs = state.jobs.filter(j => !j.type || j.type === 'bq-to-supabase');
+    const sheetsJobs = state.jobs.filter(j => j.type === 'sheets-to-bq');
 
     document.getElementById('stat-active').innerText = state.jobs.length;
 
-    jobsContainer.innerHTML = state.jobs.map(job => `
-        <div class="job-card stagger-in">
-            <div class="job-info">
-                <h3>${job.name}</h3>
-                <div class="id">${job.id}</div>
-            </div>
-            <div class="job-path">
-                <span class="mono">${job.bigquery.tableOrView}</span>
-                <span class="arrow">→</span>
-                <span class="mono">${job.supabase.tableName}</span>
-            </div>
-            <div class="job-status">
-                <div class="status-badge ${job.lastStatus || ''}">
-                    ${job.lastStatus ? job.lastStatus.toUpperCase() : 'PENDING'}
+    const renderJobCard = (job) => {
+        const isSheets = job.type === 'sheets-to-bq';
+        const sourceName = isSheets ? 'Google Sheets' : job.bigquery.tableOrView;
+        const targetName = isSheets ? job.bigquery.tableId : job.supabase.tableName;
+        const isSyncing = state.activeSyncs.has(job.id);
+        
+        return `
+            <div class="job-card stagger-in ${isSyncing ? 'syncing' : ''}" id="card-${job.id}">
+                <div class="job-info">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <h3 style="margin: 0;">${job.name}</h3>
+                        <span class="type-badge ${job.type || 'bq-to-supabase'}">
+                            ${(job.type || 'bq-to-supabase').replace(/-/g, ' ')}
+                        </span>
+                    </div>
+                    <div class="id">${job.id}</div>
                 </div>
-                <div class="mono" style="font-size: 0.65rem; color: var(--text-secondary); margin-top: 4px;">
-                    ${job.lastRun ? new Date(job.lastRun).toLocaleString() : 'NEVER RUN'}
+                <div class="job-path">
+                    <span class="mono">${sourceName}</span>
+                    <span class="arrow">→</span>
+                    <span class="mono">${targetName}</span>
                 </div>
-                ${job.lastSummary ? `<div class="mono" style="font-size: 0.65rem; color: var(--text-secondary); margin-top: 2px;">${job.lastSummary}</div>` : ''}
-            </div>
-            <div class="job-recent-logs">
-                <div class="job-recent-logs-title">
-                    RECENT LOGS
-                    ${hasRecentErrors(job.id) ? '<span class="job-error-badge">ERRORS</span>' : ''}
+                <div class="job-status">
+                    <div class="status-badge ${job.lastStatus || ''}" id="status-badge-${job.id}">
+                        ${isSyncing ? '<span class="spinner" style="margin-right: 8px;"></span>SYNCING' : (job.lastStatus ? job.lastStatus.toUpperCase() : 'PENDING')}
+                    </div>
+                    <div class="mono" style="font-size: 0.65rem; color: var(--text-secondary); margin-top: 4px;">
+                        ${job.lastRun ? new Date(job.lastRun).toLocaleString() : 'NEVER RUN'}
+                    </div>
+                    ${job.lastSummary ? `<div class="mono" style="font-size: 0.65rem; color: var(--text-secondary); margin-top: 2px;">${job.lastSummary}</div>` : ''}
                 </div>
-                ${renderMiniLogs(job.id)}
+                <div class="job-recent-logs">
+                    <div class="job-recent-logs-title">
+                        RECENT LOGS
+                        ${hasRecentErrors(job.id) ? '<span class="job-error-badge">ERRORS</span>' : ''}
+                    </div>
+                    <div id="mini-logs-${job.id}">
+                        ${renderMiniLogs(job.id)}
+                    </div>
+                    <div class="progress-container">
+                        <div class="progress-bar indeterminate" id="progress-${job.id}"></div>
+                    </div>
+                </div>
+                <div class="job-actions">
+                    <button class="btn btn-ghost" onclick="syncJob('${job.id}')" id="sync-${job.id}" ${isSyncing ? 'disabled' : ''}>
+                        ${isSyncing ? '<span class="spinner"></span>' : 'RUN'}
+                    </button>
+                    <button class="btn btn-ghost" onclick="viewLogs('${job.id}', '${job.name}')">VIEW LOGS</button>
+                    <button class="btn btn-ghost" onclick="editJob('${job.id}')" ${isSyncing ? 'disabled' : ''}>EDIT</button>
+                    <button class="btn btn-danger" onclick="deleteJob('${job.id}')" ${isSyncing ? 'disabled' : ''}>DELETE</button>
+                </div>
             </div>
-            <div class="job-actions">
-                <button class="btn btn-ghost" onclick="syncJob('${job.id}')" id="sync-${job.id}">RUN</button>
-                <button class="btn btn-ghost" onclick="viewLogs('${job.id}', '${job.name}')">VIEW LOGS</button>
-                <button class="btn btn-ghost" onclick="editJob('${job.id}')">EDIT</button>
-                <button class="btn btn-danger" onclick="deleteJob('${job.id}')">DELETE</button>
-            </div>
-        </div>
-    `).join('');
+        `;
+    };
+
+    bqJobsContainer.innerHTML = bqJobs.length > 0 
+        ? bqJobs.map(renderJobCard).join('')
+        : '<p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">NO BIGQUERY SYNC JOBS.</p>';
+
+    sheetsJobsContainer.innerHTML = sheetsJobs.length > 0
+        ? sheetsJobs.map(renderJobCard).join('')
+        : '<p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">NO SHEETS SYNC JOBS.</p>';
+}
+
+function extractSpreadsheetId(url) {
+    if (!url) return null;
+    const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    return match ? match[1] : null;
+}
+
+async function testSheetConnection() {
+    const url = document.getElementById('sheet-url').value;
+    const name = document.getElementById('sheet-name').value;
+    
+    if (!url || !name) {
+        showToast('Spreadsheet URL and Sheet Name are required');
+        return;
+    }
+
+    testSheetBtn.disabled = true;
+    testSheetBtn.innerText = 'TESTING...';
+
+    try {
+        const res = await fetch('/api/diagnostics/sheets', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${state.apiKey}`
+            },
+            body: JSON.stringify({ spreadsheetUrl: url, sheetName: name })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.success) {
+            showToast('Connection Successful: Sheet is accessible', 'success');
+        } else {
+            showToast(data.message || 'Connection Failed');
+        }
+    } catch (err) {
+        showToast('Connection Failed: Network Error');
+    } finally {
+        testSheetBtn.disabled = false;
+        testSheetBtn.innerText = 'TEST CONNECTION';
+    }
+}
+
+async function runAllSyncs() {
+    if (!confirm('INITIATE SYNC FOR ALL ENABLED JOBS?')) return;
+    
+    const enabledJobs = state.jobs.filter(j => j.enabled);
+    if (enabledJobs.length === 0) {
+        showToast('No enabled jobs to run');
+        return;
+    }
+
+    showToast(`Initiating ${enabledJobs.length} sync jobs`, 'success');
+    enabledJobs.forEach(job => {
+        syncJob(job.id);
+    });
 }
 
 async function saveJob(e) {
     e.preventDefault();
     const id = document.getElementById('job-id').value;
+    const type = jobTypeInput.value;
     const isNew = !id;
 
-    const job = {
+    let job = {
         id: id || undefined,
         name: document.getElementById('job-name').value,
         enabled: document.getElementById('job-enabled').checked,
-        bigquery: {
+        type: type
+    };
+
+    if (type === 'sheets-to-bq') {
+        const url = document.getElementById('sheet-url').value;
+        const spreadsheetId = extractSpreadsheetId(url);
+        
+        if (!spreadsheetId) {
+            showToast('Invalid Google Sheets URL');
+            return;
+        }
+
+        const sheetName = document.getElementById('sheet-name').value;
+        if (!sheetName) {
+            showToast('Please select a valid Sheet Name from the whitelist');
+            return;
+        }
+
+        job.sheets = {
+            spreadsheetUrl: url,
+            spreadsheetId: spreadsheetId,
+            sheetName: sheetName,
+            projectId: document.getElementById('sheet-bq-project').value,
+            datasetId: document.getElementById('sheet-bq-dataset').value || undefined,
+            append: document.getElementById('sheet-append').checked
+        };
+        // For compatibility with BigQuery load logic if needed
+        job.bigquery = {
+            projectId: job.sheets.projectId,
+            datasetId: job.sheets.datasetId || 'auto',
+            tableId: job.sheets.sheetName
+        };
+    } else {
+        job.bigquery = {
             projectId: document.getElementById('bq-project').value,
             datasetId: document.getElementById('bq-dataset').value,
             tableOrView: document.getElementById('bq-table').value,
@@ -240,18 +352,18 @@ async function saveJob(e) {
             forceStringFields: document.getElementById('bq-force-string').value
                 ? document.getElementById('bq-force-string').value.split(',').map(s => s.trim()).filter(Boolean)
                 : undefined,
-        },
-        supabase: {
+        };
+        job.supabase = {
             tableName: document.getElementById('sb-table').value,
             upsertColumns: document.getElementById('sb-columns').value.split(',').map(s => s.trim()),
-        }
-    };
+        };
+    }
 
     try {
         const method = isNew ? 'POST' : 'PUT';
         const url = isNew ? '/api/configs' : `/api/configs/${id}`;
 
-        await fetch(url, {
+        const res = await fetch(url, {
             method,
             headers: {
                 'Content-Type': 'application/json',
@@ -260,29 +372,41 @@ async function saveJob(e) {
             body: JSON.stringify(job)
         });
 
+        if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.error || 'Failed to save');
+        }
+
         jobModal.classList.add('hidden');
         fetchJobs();
+        showToast('Job Configuration Saved', 'success');
     } catch (err) {
-        showToast('Failed to save job configuration');
+        showToast(err.message || 'Failed to save job configuration');
     }
 }
 
 async function syncJob(id) {
-    const btn = document.getElementById(`sync-${id}`);
+    if (state.activeSyncs.has(id)) return;
+    
+    state.activeSyncs.set(id, { batchNumber: 1, runId: null });
+    renderJobs();
+
     const job = state.jobs.find(j => j.id === id);
-    const originalText = btn.innerText;
-    btn.innerText = 'SYNCING...';
-    btn.disabled = true;
-
-    openLogModal(id, job?.name || id, true);
-
     let batchNumber = 1;
     let runId = null;
 
+    const pollInterval = setInterval(async () => {
+        const syncState = state.activeSyncs.get(id);
+        if (!syncState || !syncState.runId) return;
+        await fetchJobLogs(id);
+        const miniLogsContainer = document.getElementById(`mini-logs-${id}`);
+        if (miniLogsContainer) {
+            miniLogsContainer.innerHTML = renderMiniLogs(id);
+        }
+    }, 2000);
+
     try {
         while (true) {
-            btn.innerText = batchNumber === 1 ? 'SYNCING...' : `BATCH ${batchNumber}...`;
-            
             const res = await fetch(`/api/sync/${id}`, {
                 method: 'POST',
                 headers: { 
@@ -294,55 +418,37 @@ async function syncJob(id) {
 
             if (!res.ok) {
                 const data = await res.json();
-                state.logs.push({
-                    timestamp: new Date().toISOString(),
-                    level: 'ERROR',
-                    jobId: id,
-                    jobName: job?.name || id,
-                    runId: runId || 'frontend-error',
-                    phase: 'SYNC_ERROR',
-                    message: data.error || 'Sync failed'
-                });
-                renderLogs();
                 showToast(`Sync Failed: ${data.error}`);
-                fetchJobs();
-                return;
+                break;
             }
 
             const result = await res.json();
             runId = result.runId;
-            state.currentRunId = runId;
-
-            if (result.logs && result.logs.length > 0) {
-                state.logs = state.logs.concat(result.logs);
-                renderLogs();
-                updateLogStats();
+            state.activeSyncs.set(id, { batchNumber, runId });
+            
+            const statusBadge = document.getElementById(`status-badge-${id}`);
+            if (statusBadge && result.rowsProcessed !== undefined) {
+                const totalSoFar = (result.stats?.totalRows || result.rowsProcessed);
+                const summaryEl = statusBadge.parentElement.querySelector('.mono:last-child');
+                if (summaryEl) {
+                    summaryEl.innerText = `Synced ${totalSoFar.toLocaleString()} rows so far...`;
+                }
             }
 
             if (!result.hasMore) {
-                // Sync complete
-                fetchJobs();
-                return;
+                showToast(`Sync completed for ${job?.name || id}`, 'success');
+                break;
             }
 
-            // Continue with next batch
             batchNumber = result.nextBatch;
         }
     } catch (err) {
-        state.logs.push({
-            timestamp: new Date().toISOString(),
-            level: 'ERROR',
-            jobId: id,
-            jobName: job?.name || id,
-            runId: runId || 'frontend-error',
-            phase: 'NETWORK_ERROR',
-            message: 'Network error during sync request'
-        });
-        renderLogs();
+        console.error(err);
         showToast('Network Error during sync');
     } finally {
-        btn.innerText = originalText;
-        btn.disabled = false;
+        clearInterval(pollInterval);
+        state.activeSyncs.delete(id);
+        fetchJobs();
     }
 }
 
@@ -368,23 +474,42 @@ function editJob(id) {
     const job = state.jobs.find(j => j.id === id);
     if (!job) return;
 
-    modalTitle.innerText = 'Update Sync Job';
+    const type = job.type || 'bq-to-supabase';
+    jobTypeInput.value = type;
+    
+    modalTitle.innerText = `Update ${type === 'sheets-to-bq' ? 'Sheets' : 'BigQuery'} Sync Job`;
     document.getElementById('job-id').value = job.id;
     document.getElementById('job-name').value = job.name;
     document.getElementById('job-enabled').checked = job.enabled;
-    document.getElementById('bq-project').value = job.bigquery.projectId;
-    document.getElementById('bq-dataset').value = job.bigquery.datasetId;
-    document.getElementById('bq-table').value = job.bigquery.tableOrView;
-    document.getElementById('bq-column').value = job.bigquery.incrementalColumn || '';
-    document.getElementById('bq-force-string').value = (job.bigquery.forceStringFields || []).join(', ');
-    const warning = document.getElementById('incremental-warning');
-    if (job.bigquery.incrementalColumn) {
-        warning.classList.add('hidden');
+
+    if (type === 'sheets-to-bq') {
+        bqSection.classList.remove('active');
+        sheetsSection.classList.add('active');
+        
+        document.getElementById('sheet-url').value = job.sheets.spreadsheetUrl;
+        document.getElementById('sheet-name').value = job.sheets.sheetName;
+        document.getElementById('sheet-bq-project').value = job.sheets.projectId;
+        document.getElementById('sheet-bq-dataset').value = job.sheets.datasetId || '';
+        document.getElementById('sheet-append').checked = job.sheets.append;
     } else {
-        warning.classList.remove('hidden');
+        bqSection.classList.add('active');
+        sheetsSection.classList.remove('active');
+
+        document.getElementById('bq-project').value = job.bigquery.projectId;
+        document.getElementById('bq-dataset').value = job.bigquery.datasetId;
+        document.getElementById('bq-table').value = job.bigquery.tableOrView;
+        document.getElementById('bq-column').value = job.bigquery.incrementalColumn || '';
+        document.getElementById('bq-force-string').value = (job.bigquery.forceStringFields || []).join(', ');
+        
+        const warning = document.getElementById('incremental-warning');
+        if (job.bigquery.incrementalColumn) {
+            warning.classList.add('hidden');
+        } else {
+            warning.classList.remove('hidden');
+        }
+        document.getElementById('sb-table').value = job.supabase.tableName;
+        document.getElementById('sb-columns').value = job.supabase.upsertColumns.join(', ');
     }
-    document.getElementById('sb-table').value = job.supabase.tableName;
-    document.getElementById('sb-columns').value = job.supabase.upsertColumns.join(', ');
 
     jobModal.classList.remove('hidden');
 }
@@ -477,11 +602,16 @@ async function openLogModal(jobId, jobName, isNewSync = false) {
     logEntries.innerHTML = '<div class="log-loading"></div>';
     logModal.classList.remove('hidden');
     
-    if (isNewSync) {
-        logEntries.innerHTML = '<div class="log-empty-state"><span class="mono">STARTING SYNC...</span></div>';
+    const activeSync = state.activeSyncs.get(jobId);
+    if (isNewSync || activeSync) {
+        state.currentRunId = activeSync?.runId || null;
+        logEntries.innerHTML = '<div class="log-empty-state"><span class="mono">AWAITING LOG STREAM...</span></div>';
         state.logPollingInterval = setInterval(() => {
-            if (state.currentRunId) {
-                fetchLogsForRun(jobId, state.currentRunId);
+            const currentSync = state.activeSyncs.get(jobId);
+            const rId = state.currentRunId || currentSync?.runId;
+            if (rId) {
+                state.currentRunId = rId;
+                fetchLogsForRun(jobId, rId);
             }
         }, 1000);
         return;
@@ -772,15 +902,32 @@ function downloadLogs() {
 loginBtn.addEventListener('click', login);
 apiKeyInput.addEventListener('keypress', (e) => e.key === 'Enter' && login());
 logoutBtn.addEventListener('click', logout);
-createBtn.addEventListener('click', () => {
-    modalTitle.innerText = 'Configure New Sync Job';
+runAllBtn.addEventListener('click', runAllSyncs);
+
+createBqBtn.addEventListener('click', () => {
+    jobTypeInput.value = 'bq-to-supabase';
+    bqSection.classList.add('active');
+    sheetsSection.classList.remove('active');
+    modalTitle.innerText = 'Configure New BigQuery Sync';
     jobForm.reset();
     document.getElementById('job-id').value = '';
     document.getElementById('incremental-warning').classList.remove('hidden');
     jobModal.classList.remove('hidden');
 });
+
+createSheetsBtn.addEventListener('click', () => {
+    jobTypeInput.value = 'sheets-to-bq';
+    bqSection.classList.remove('active');
+    sheetsSection.classList.add('active');
+    modalTitle.innerText = 'Configure New Sheets Sync';
+    jobForm.reset();
+    document.getElementById('job-id').value = '';
+    jobModal.classList.remove('hidden');
+});
+
 cancelModal.addEventListener('click', () => jobModal.classList.add('hidden'));
 jobForm.addEventListener('submit', saveJob);
+testSheetBtn.addEventListener('click', testSheetConnection);
 window.addEventListener('click', (e) => e.target === jobModal && jobModal.classList.add('hidden'));
 
 document.getElementById('bq-column').addEventListener('input', function() {

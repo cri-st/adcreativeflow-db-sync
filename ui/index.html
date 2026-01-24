@@ -35,8 +35,14 @@
                     <span>SYNC OPS / MULTI-INSTANCE</span>
                 </div>
                 <div class="header-actions">
-                    <button id="create-btn" class="btn">
-                        + NEW SYNC JOB
+                    <button id="run-all-btn" class="btn btn-ghost" style="margin-right: 12px;">
+                        RUN ALL SYNCS
+                    </button>
+                    <button id="create-bq-btn" class="btn btn-ghost">
+                        + BIGQUERY SYNC
+                    </button>
+                    <button id="create-sheets-btn" class="btn" style="margin-left: 12px;">
+                        + SHEETS SYNC
                     </button>
                     <button id="logout-btn" class="btn btn-ghost" style="margin-left: 12px;">
                         EXIT
@@ -59,9 +65,18 @@
                 </div>
             </div>
 
-            <div class="jobs-list" id="jobs-container">
-                <!-- Jobs populated here -->
-                <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 40px;">SCANNING FOR JOBS...</p>
+            <div class="section-title">
+                <h2 class="uppercase">BigQuery &rarr; Supabase</h2>
+            </div>
+            <div class="jobs-list" id="bq-jobs-container">
+                <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">SCANNING...</p>
+            </div>
+
+            <div class="section-title" style="margin-top: 60px;">
+                <h2 class="uppercase">Sheets &rarr; BigQuery</h2>
+            </div>
+            <div class="jobs-list" id="sheets-jobs-container">
+                <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">SCANNING...</p>
             </div>
         </div>
     </div>
@@ -72,63 +87,105 @@
             <h2 id="modal-title" class="uppercase">Configure Sync Job</h2>
             <form id="job-form">
                 <input type="hidden" id="job-id">
+                <input type="hidden" id="job-type" value="bq-to-supabase">
                 
                 <div class="form-group">
                     <label class="uppercase">Job Identification Name</label>
                     <input type="text" id="job-name" class="input-field" required placeholder="Ex: Daily Ecom Funnel">
                 </div>
 
-                <div class="grid-cols-2">
-                    <div class="section-column">
-                        <p class="mono uppercase" style="font-size: 0.75rem; color: var(--accent-color); margin-bottom: 20px;">[ Source: BigQuery ]</p>
-                        <div class="form-group">
-                            <label>Project ID</label>
-                            <input type="text" id="bq-project" class="input-field" required value="acf-ecomerce-database">
-                        </div>
-                        <div class="form-group">
-                            <label>Dataset ID</label>
-                            <input type="text" id="bq-dataset" class="input-field" required placeholder="shm_ebra">
-                        </div>
-                        <div class="form-group">
-                            <label>Table / View Name</label>
-                            <input type="text" id="bq-table" class="input-field" required placeholder="vw_shm_funnel">
-                        </div>
-                        <div class="form-group">
-                            <label>Incremental Column (Optional)</label>
-                            <input type="text" id="bq-column" class="input-field" placeholder="date_monday">
-                            <div id="incremental-warning" class="incremental-warning hidden">
-                                ⚠️ FULL REFRESH MODE - Without an incremental column, ALL data will be fetched on every sync. This is recommended only for small tables.
+                <div id="bq-supabase-section" class="modal-section active">
+                    <div class="grid-cols-2">
+                        <div class="section-column">
+                            <p class="mono uppercase" style="font-size: 0.75rem; color: var(--accent-color); margin-bottom: 20px;">[ Source: BigQuery ]</p>
+                            <div class="form-group">
+                                <label>Project ID</label>
+                                <input type="text" id="bq-project" class="input-field" value="acf-ecomerce-database">
+                            </div>
+                            <div class="form-group">
+                                <label>Dataset ID</label>
+                                <input type="text" id="bq-dataset" class="input-field" placeholder="shm_ebra">
+                            </div>
+                            <div class="form-group">
+                                <label>Table / View Name</label>
+                                <input type="text" id="bq-table" class="input-field" placeholder="vw_shm_funnel">
+                            </div>
+                            <div class="form-group">
+                                <label>Incremental Column (Optional)</label>
+                                <input type="text" id="bq-column" class="input-field" placeholder="date_monday">
+                                <div id="incremental-warning" class="incremental-warning hidden">
+                                    ⚠️ FULL REFRESH MODE - Without an incremental column, ALL data will be fetched on every sync. This is recommended only for small tables.
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Force String Fields (Comma separated)</label>
+                                <input type="text" id="bq-force-string" class="input-field" placeholder="ad_id,campaign_id,account_id">
                             </div>
                         </div>
-                        <div class="form-group">
-                            <label>Force String Fields (Comma separated)</label>
-                            <input type="text" id="bq-force-string" class="input-field" placeholder="ad_id,campaign_id,account_id">
-                            <div class="incremental-warning" style="display: block; color: var(--text-secondary); font-size: 0.7rem;">
-                                Columns that should always be kept as strings (prevents precision loss for large IDs)
-                            </div>
-                        </div>
-                    </div>
 
-                    <div class="section-column">
-                        <p class="mono uppercase" style="font-size: 0.75rem; color: var(--accent-color); margin-bottom: 20px;">[ Target: Supabase ]</p>
-                        <div class="form-group">
-                            <label>Target Table Name</label>
-                            <input type="text" id="sb-table" class="input-field" required placeholder="vw_shm_funnel">
-                        </div>
-                        <div class="form-group">
-                            <label>Unique Columns (Comma separated)</label>
-                            <input type="text" id="sb-columns" class="input-field" required placeholder="date_monday,campaign_id">
-                        </div>
-                        <div class="form-group" style="margin-top: 32px;">
-                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                                <input type="checkbox" id="job-enabled" checked style="accent-color: var(--accent-color);">
-                                <span class="uppercase">Enable Auto-Sync</span>
-                            </label>
+                        <div class="section-column">
+                            <p class="mono uppercase" style="font-size: 0.75rem; color: var(--accent-color); margin-bottom: 20px;">[ Target: Supabase ]</p>
+                            <div class="form-group">
+                                <label>Target Table Name</label>
+                                <input type="text" id="sb-table" class="input-field" placeholder="vw_shm_funnel">
+                            </div>
+                            <div class="form-group">
+                                <label>Unique Columns (Comma separated)</label>
+                                <input type="text" id="sb-columns" class="input-field" placeholder="date_monday,campaign_id">
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="job-actions" style="margin-top: 40px; border-top: 1px solid var(--border-color); padding-top: 24px;">
+                <div id="sheets-bq-section" class="modal-section">
+                    <div class="grid-cols-2">
+                        <div class="section-column">
+                            <p class="mono uppercase" style="font-size: 0.75rem; color: var(--accent-color); margin-bottom: 20px;">[ Source: Google Sheets ]</p>
+                            <div class="form-group">
+                                <label>Spreadsheet URL</label>
+                                <input type="text" id="sheet-url" class="input-field" placeholder="https://docs.google.com/spreadsheets/d/...">
+                                <button type="button" id="test-sheet-btn" class="btn btn-test">TEST CONNECTION</button>
+                            </div>
+                            <div class="form-group">
+                                <label>Sheet Name</label>
+                                <select id="sheet-name" class="input-field">
+                                    <option value="">Select a table...</option>
+                                    <option value="shm_au_dimension_meta">shm_au_dimension_meta</option>
+                                    <option value="shm_au_facts_meta">shm_au_facts_meta</option>
+                                    <option value="shm_ca_dimension_meta">shm_ca_dimension_meta</option>
+                                    <option value="shm_ca_facts_meta">shm_ca_facts_meta</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="section-column">
+                            <p class="mono uppercase" style="font-size: 0.75rem; color: var(--accent-color); margin-bottom: 20px;">[ Target: BigQuery ]</p>
+                            <div class="form-group">
+                                <label>Project ID</label>
+                                <input type="text" id="sheet-bq-project" class="input-field" value="acf-prod">
+                            </div>
+                            <div class="form-group">
+                                <label>Dataset ID (Optional)</label>
+                                <input type="text" id="sheet-bq-dataset" class="input-field" placeholder="dimensions / facts (Auto)">
+                            </div>
+                            <div class="form-group" style="margin-top: 32px;">
+                                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" id="sheet-append" style="accent-color: var(--accent-color);">
+                                    <span class="uppercase">Append Data (vs Truncate)</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 24px; border-top: 1px solid var(--border-color); padding-top: 24px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="job-enabled" checked style="accent-color: var(--accent-color);">
+                        <span class="uppercase">Enable Auto-Sync</span>
+                    </label>
+                </div>
+
+                <div class="job-actions" style="margin-top: 24px;">
                     <button type="button" id="cancel-modal" class="btn btn-ghost">ABORT</button>
                     <button type="submit" class="btn">SAVE CONFIGURATION</button>
                 </div>
