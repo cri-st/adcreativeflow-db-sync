@@ -188,3 +188,62 @@ npm run dev
 # Desplegar a producción
 npm run deploy
 ```
+
+---
+
+## 📑 Sincronización Google Sheets → BigQuery
+
+Esta funcionalidad permite ingerir datos directamente desde hojas de cálculo de Google Sheets hacia tablas de BigQuery. Es ideal para datos manuales, metas, o configuraciones que gestionan equipos no técnicos.
+
+### ⚙️ Flujo de Trabajo
+
+A diferencia de la sincronización BQ->Supabase, este flujo es **Unidireccional** hacia el Data Warehouse.
+
+1.  **Lectura de Headers**:
+    -   Lee la primera fila de la hoja especificada.
+    -   Sanitiza los nombres de columnas (elimina espacios, caracteres especiales) para que sean compatibles con BigQuery (ej: "Monto Total ($)" -> "Monto_Total___").
+
+2.  **Extracción por Lotes (Batching)**:
+    -   Lee la hoja en bloques de 5,000 filas para evitar timeouts de la API de Google Sheets.
+    -   Gestiona la paginación interna y reintentos (backoff exponencial) en caso de errores 429 (Rate Limit).
+
+3.  **Carga a BigQuery (Load Job)**:
+    -   Transforma los datos a formato **NDJSON** (Newline Delimited JSON) en memoria.
+    -   Utiliza la API de Jobs de BigQuery (`uploadType=multipart`) para una carga eficiente.
+    -   **Primer Lote**: Utiliza `WRITE_TRUNCATE` para limpiar la tabla destino y reemplazarla completamente.
+    -   **Lotes Siguientes**: Utiliza `WRITE_APPEND` para agregar el resto de los datos.
+    -   **Schema Autodetect**: Delega a BigQuery la inferencia de tipos de datos (STRING, INTEGER, FLOAT, BOOLEAN).
+
+### 🛡️ Configuración y Permisos
+
+Para que el worker pueda leer una hoja de cálculo privada ("Restricted"), se utiliza el mecanismo estándar de Google Drive:
+
+1.  **Service Account**: Se utiliza la misma cuenta de servicio configurada en `GOOGLE_SERVICE_ACCOUNT_JSON`.
+2.  **Acceso Explícito**: El usuario debe compartir el archivo ("Share") con el email de la Service Account (`client_email`), otorgándole rol de "Viewer" (Lector).
+3.  **Validación**: El dashboard incluye un botón "Test Connection" que verifica la accesibilidad de la hoja antes de guardar el job.
+
+### 📄 Configuración del Job (JSON)
+
+Los jobs de este tipo se distinguen por el campo `type: "sheets-to-bq"`.
+
+```json
+{
+  "id": "job_sales_targets",
+  "name": "Objetivos de Ventas 2024",
+  "enabled": true,
+  "type": "sheets-to-bq",
+  "sheets": {
+    "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1ABC...",
+    "spreadsheetId": "1ABC...",       // ID extraído de la URL
+    "sheetName": "Sheet1",            // Nombre exacto de la pestaña
+    "projectId": "mi-proyecto-gcp",
+    "datasetId": "raw_data",
+    "append": false                   // false = Reemplazar tabla (recomendado)
+  },
+  "bigquery": {
+    "projectId": "mi-proyecto-gcp",
+    "datasetId": "raw_data",
+    "tableId": "sales_targets_2024"
+  }
+}
+```
