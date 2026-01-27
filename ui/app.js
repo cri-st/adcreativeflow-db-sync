@@ -39,11 +39,17 @@ const cancelModal = document.getElementById('cancel-modal');
 const modalTitle = document.getElementById('modal-title');
 const testSheetBtn = document.getElementById('test-sheet-btn');
 
-if (state.apiKey) {
-    showDashboard();
-}
-
-function showToast(message, type = 'error', duration = 5000) {
+const logModal = document.getElementById('log-modal');
+const logModalTitle = document.getElementById('log-modal-title');
+const logModalSubtitle = document.getElementById('log-modal-subtitle');
+const logModalClose = document.getElementById('log-modal-close');
+const logEntries = document.getElementById('log-entries');
+const logClearBtn = document.getElementById('log-clear-btn');
+const logDownloadBtn = document.getElementById('log-download-btn');
+const logFilters = document.querySelectorAll('.log-filter');
+const logDeletedBanner = document.getElementById('log-deleted-banner');
+const logErrorBanner = document.getElementById('log-error-banner');
+const logCompleteBanner = document.getElementById('log-complete-banner');
     const container = document.getElementById('toast-container');
     const icons = { error: '❌', success: '✅', warning: '⚠️' };
     
