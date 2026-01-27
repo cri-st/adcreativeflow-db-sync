@@ -66,9 +66,6 @@ app.post('/api/configs', async (c) => {
 		}
 
 		if (sheetsJob.sheets?.sheetName) {
-			if (!SHEETS_WHITELIST.includes(sheetsJob.sheets.sheetName)) {
-				return c.json({ error: 'Invalid sheet name. Allowed: ' + SHEETS_WHITELIST.join(', ') }, 400);
-			}
 			if (!sheetsJob.sheets.range) {
 				sheetsJob.sheets.range = sheetsJob.sheets.sheetName;
 			}
@@ -96,9 +93,6 @@ app.put('/api/configs/:id', async (c) => {
 		}
 
 		if (sheetsJob.sheets?.sheetName) {
-			if (!SHEETS_WHITELIST.includes(sheetsJob.sheets.sheetName)) {
-				return c.json({ error: 'Invalid sheet name. Allowed: ' + SHEETS_WHITELIST.join(', ') }, 400);
-			}
 			if (!sheetsJob.sheets.range) {
 				sheetsJob.sheets.range = sheetsJob.sheets.sheetName;
 			}

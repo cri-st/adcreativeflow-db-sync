@@ -80,8 +80,4 @@ export interface SheetsSyncConfig {
 
 export type SyncJobConfig = BigQuerySyncConfig | SheetsSyncConfig;
 
-export const SHEETS_WHITELIST: string[] = [
-    'Funnel Data',
-    'Ad Spend',
-    'Campaign Performance'
-];
+export const SHEETS_WHITELIST: string[] = [];
