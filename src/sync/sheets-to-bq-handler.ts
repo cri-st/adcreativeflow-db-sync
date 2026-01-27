@@ -18,6 +18,18 @@ function sanitizeColumnName(name: string): string {
         .replace(/^{0-9}/, '_$&');
 }
 
+function cleanValue(val: any): any {
+    if (val === undefined || val === '') return null;
+    
+    if (typeof val === 'string') {
+        const cleaned = val.replace(/[$,\s]/g, '');
+        if (!isNaN(Number(cleaned)) && cleaned !== '') {
+            return val;
+        }
+    }
+    return val;
+}
+
 export async function handleSheetsToBigQuerySync(
     auth: GlobalAuth,
     job: SheetsSyncConfig,
