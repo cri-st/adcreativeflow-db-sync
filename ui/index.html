@@ -60,34 +60,34 @@
             </div>
 
             <div class="tabs-container">
-                <button class="tab-btn active" data-tab="bq">
-                    <span class="tab-icon">⚡</span>
-                    BIGQUERY &rarr; SUPABASE
-                </button>
-                <button class="tab-btn" data-tab="sheets">
+                <button class="tab-btn active" data-tab="sheets">
                     <span class="tab-icon">📊</span>
                     SHEETS &rarr; BIGQUERY
                 </button>
+                <button class="tab-btn" data-tab="bq">
+                    <span class="tab-icon">⚡</span>
+                    BIGQUERY &rarr; SUPABASE
+                </button>
             </div>
 
-            <div id="tab-bq" class="tab-content active">
-                <div class="tab-header-actions">
-                    <button id="create-bq-btn" class="btn btn-ghost">
-                        + NEW JOB
-                    </button>
-                </div>
-                <div class="jobs-list" id="bq-jobs-container">
-                    <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">SCANNING...</p>
-                </div>
-            </div>
-
-            <div id="tab-sheets" class="tab-content">
+            <div id="tab-sheets" class="tab-content active">
                 <div class="tab-header-actions">
                     <button id="create-sheets-btn" class="btn">
                         + NEW JOB
                     </button>
                 </div>
                 <div class="jobs-list" id="sheets-jobs-container">
+                    <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">SCANNING...</p>
+                </div>
+            </div>
+
+            <div id="tab-bq" class="tab-content">
+                <div class="tab-header-actions">
+                    <button id="create-bq-btn" class="btn btn-ghost">
+                        + NEW JOB
+                    </button>
+                </div>
+                <div class="jobs-list" id="bq-jobs-container">
                     <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">SCANNING...</p>
                 </div>
             </div>
