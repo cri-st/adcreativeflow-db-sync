@@ -128,6 +128,11 @@ app.post('/api/diagnostics/sheets', async (c) => {
 	}
 
 	try {
+		if (!c.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+			console.error('Missing GOOGLE_SERVICE_ACCOUNT_JSON env var');
+			return c.json({ error: 'Server configuration error: Missing Google Credentials' }, 500);
+		}
+
 		const client = new SheetsClient(c.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 		const range = sheetName ? `${sheetName}!1:1` : 'A1:Z1';
 		const rows = await client.getSheetRange(spreadsheetId, range);
@@ -138,7 +143,8 @@ app.post('/api/diagnostics/sheets', async (c) => {
 			preview: rows ? rows[0] : [] 
 		});
 	} catch (err: any) {
-		return c.json({ error: err.message }, 500);
+		console.error('Diagnostic error:', err);
+		return c.json({ error: err.message || 'Unknown error during connection test' }, 500);
 	}
 });
 
