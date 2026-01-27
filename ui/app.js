@@ -30,6 +30,27 @@ const runAllBtn = document.getElementById('run-all-btn');
 const createBqBtn = document.getElementById('create-bq-btn');
 const createSheetsBtn = document.getElementById('create-sheets-btn');
 
+// Tab elements
+const tabBtns = document.querySelectorAll('.tab-btn');
+const tabContents = document.querySelectorAll('.tab-content');
+
+// Tab logic
+tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const tabId = btn.dataset.tab;
+        
+        tabBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        tabContents.forEach(c => {
+            c.classList.remove('active');
+            if (c.id === `tab-${tabId}`) {
+                c.classList.add('active');
+            }
+        });
+    });
+});
+
 const jobModal = document.getElementById('job-modal');
 const jobForm = document.getElementById('job-form');
 const jobTypeInput = document.getElementById('job-type');
@@ -186,10 +207,28 @@ function hasRecentErrors(jobId) {
     );
 }
 
+function toggleJobLogs(jobId) {
+    const logsContainer = document.getElementById(`logs-container-${jobId}`);
+    const toggleBtn = document.getElementById(`toggle-logs-${jobId}`);
+    
+    if (logsContainer && toggleBtn) {
+        logsContainer.classList.toggle('expanded');
+        toggleBtn.classList.toggle('active');
+        
+        // Hide mini logs summary if expanded
+        const miniLogs = document.getElementById(`mini-logs-${jobId}`);
+        if (miniLogs) {
+            miniLogs.style.opacity = logsContainer.classList.contains('expanded') ? '0' : '1';
+        }
+    }
+}
+
 function renderJobs() {
+    // Filter jobs by tab logic (handled by CSS via container IDs, but we fetch all)
     const bqJobs = state.jobs.filter(j => !j.type || j.type === 'bq-to-supabase');
     const sheetsJobs = state.jobs.filter(j => j.type === 'sheets-to-bq');
 
+    // Update global counter (active jobs total)
     document.getElementById('stat-active').innerText = state.jobs.length;
 
     const renderJobCard = (job) => {
@@ -209,11 +248,13 @@ function renderJobs() {
                     </div>
                     <div class="id">${job.id}</div>
                 </div>
+                
                 <div class="job-path">
                     <span class="mono">${sourceName}</span>
                     <span class="arrow">→</span>
                     <span class="mono">${targetName}</span>
                 </div>
+                
                 <div class="job-status">
                     <div class="status-badge ${job.lastStatus || ''}" id="status-badge-${job.id}">
                         ${isSyncing ? '<span class="spinner" style="margin-right: 8px;"></span>SYNCING' : (job.lastStatus ? job.lastStatus.toUpperCase() : 'PENDING')}
@@ -223,9 +264,24 @@ function renderJobs() {
                     </div>
                     ${job.lastSummary ? `<div class="mono" style="font-size: 0.65rem; color: var(--text-secondary); margin-top: 2px;">${job.lastSummary}</div>` : ''}
                 </div>
-                <div class="job-recent-logs">
+
+                <div class="job-actions">
+                    <button class="btn btn-ghost" onclick="syncJob('${job.id}')" id="sync-${job.id}" ${isSyncing ? 'disabled' : ''}>
+                        ${isSyncing ? '<span class="spinner"></span>' : 'RUN'}
+                    </button>
+                    <button class="btn btn-ghost" onclick="viewLogs('${job.id}', '${job.name}')">LOGS</button>
+                    
+                    <button class="btn-toggle-logs" id="toggle-logs-${job.id}" onclick="toggleJobLogs('${job.id}')" title="Toggle Recent Logs">
+                        <span style="font-size: 10px;">▼</span>
+                    </button>
+                    
+                    <button class="btn btn-ghost" onclick="editJob('${job.id}')" ${isSyncing ? 'disabled' : ''}>EDIT</button>
+                    <button class="btn btn-danger" onclick="deleteJob('${job.id}')" ${isSyncing ? 'disabled' : ''}>DELETE</button>
+                </div>
+
+                <div class="job-recent-logs" id="logs-container-${job.id}">
                     <div class="job-recent-logs-title">
-                        RECENT LOGS
+                        RECENT LOGS STREAM
                         ${hasRecentErrors(job.id) ? '<span class="job-error-badge">ERRORS</span>' : ''}
                     </div>
                     <div id="mini-logs-${job.id}">
@@ -234,14 +290,6 @@ function renderJobs() {
                     <div class="progress-container">
                         <div class="progress-bar indeterminate" id="progress-${job.id}"></div>
                     </div>
-                </div>
-                <div class="job-actions">
-                    <button class="btn btn-ghost" onclick="syncJob('${job.id}')" id="sync-${job.id}" ${isSyncing ? 'disabled' : ''}>
-                        ${isSyncing ? '<span class="spinner"></span>' : 'RUN'}
-                    </button>
-                    <button class="btn btn-ghost" onclick="viewLogs('${job.id}', '${job.name}')">VIEW LOGS</button>
-                    <button class="btn btn-ghost" onclick="editJob('${job.id}')" ${isSyncing ? 'disabled' : ''}>EDIT</button>
-                    <button class="btn btn-danger" onclick="deleteJob('${job.id}')" ${isSyncing ? 'disabled' : ''}>DELETE</button>
                 </div>
             </div>
         `;

@@ -38,12 +38,6 @@
                     <button id="run-all-btn" class="btn btn-ghost" style="margin-right: 12px;">
                         RUN ALL SYNCS
                     </button>
-                    <button id="create-bq-btn" class="btn btn-ghost">
-                        + BIGQUERY SYNC
-                    </button>
-                    <button id="create-sheets-btn" class="btn" style="margin-left: 12px;">
-                        + SHEETS SYNC
-                    </button>
                     <button id="logout-btn" class="btn btn-ghost" style="margin-left: 12px;">
                         EXIT
                     </button>
@@ -65,18 +59,37 @@
                 </div>
             </div>
 
-            <div class="section-title">
-                <h2 class="uppercase">BigQuery &rarr; Supabase</h2>
-            </div>
-            <div class="jobs-list" id="bq-jobs-container">
-                <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">SCANNING...</p>
+            <div class="tabs-container">
+                <button class="tab-btn active" data-tab="bq">
+                    <span class="tab-icon">⚡</span>
+                    BIGQUERY &rarr; SUPABASE
+                </button>
+                <button class="tab-btn" data-tab="sheets">
+                    <span class="tab-icon">📊</span>
+                    SHEETS &rarr; BIGQUERY
+                </button>
             </div>
 
-            <div class="section-title" style="margin-top: 60px;">
-                <h2 class="uppercase">Sheets &rarr; BigQuery</h2>
+            <div id="tab-bq" class="tab-content active">
+                <div class="tab-header-actions">
+                    <button id="create-bq-btn" class="btn btn-ghost">
+                        + NEW JOB
+                    </button>
+                </div>
+                <div class="jobs-list" id="bq-jobs-container">
+                    <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">SCANNING...</p>
+                </div>
             </div>
-            <div class="jobs-list" id="sheets-jobs-container">
-                <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">SCANNING...</p>
+
+            <div id="tab-sheets" class="tab-content">
+                <div class="tab-header-actions">
+                    <button id="create-sheets-btn" class="btn">
+                        + NEW JOB
+                    </button>
+                </div>
+                <div class="jobs-list" id="sheets-jobs-container">
+                    <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">SCANNING...</p>
+                </div>
             </div>
         </div>
     </div>
