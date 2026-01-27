@@ -347,13 +347,19 @@ async function saveJob(e) {
             return;
         }
 
+        const datasetId = document.getElementById('sheet-bq-dataset').value;
+        if (!datasetId) {
+            showToast('Please enter the Dataset ID');
+            return;
+        }
+
         job.sheets = {
             spreadsheetUrl: url,
             spreadsheetId: spreadsheetId,
             range: tabName,
             sheetName: tabName,
             projectId: document.getElementById('sheet-bq-project').value,
-            datasetId: document.getElementById('sheet-bq-dataset').value || undefined,
+            datasetId: datasetId,
             append: document.getElementById('sheet-append').checked
         };
         job.bigquery = {
