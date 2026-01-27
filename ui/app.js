@@ -55,6 +55,26 @@ if (state.apiKey) {
     showDashboard();
 }
 
+function showToast(message, type = 'error', duration = 5000) {
+    const container = document.getElementById('toast-container');
+    const icons = { error: '❌', success: '✅', warning: '⚠️' };
+    
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.innerHTML = `
+        <span class="toast-icon">${icons[type] || icons.error}</span>
+        <span class="toast-message">${message}</span>
+        <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+    `;
+    
+    container.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.classList.add('toast-fade-out');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
 async function login() {
     const key = apiKeyInput.value.trim();
     if (!key) return;
