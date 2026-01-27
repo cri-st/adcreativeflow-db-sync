@@ -294,7 +294,21 @@ async function runJobWithAutoContinuation(
 			);
 		}
 
-		if (!result.hasMore) {
+		if (result.hasMore && originUrl) {
+			const nextBatch = batchNumber + 1;
+			const nextUrl = `${originUrl}/api/sync/${job.id}`;
+			
+			ctx.waitUntil(
+				fetch(nextUrl, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${env.SYNC_API_KEY}`
+					},
+					body: JSON.stringify({ runId: currentRunId, batchNumber: nextBatch })
+				}).catch(err => console.error(`Failed to trigger next batch ${nextBatch}:`, err))
+			);
+		} else if (!result.hasMore) {
 			job.lastRun = new Date().toISOString();
 			job.lastStatus = 'success';
 			delete job.lastError;
