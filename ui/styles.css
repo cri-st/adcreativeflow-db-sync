@@ -57,9 +57,10 @@ body::before {
 
 /* Components: Layout */
 #app {
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 40px 20px;
+  width: 100%;
 }
 
 .hidden {
@@ -290,10 +291,29 @@ body::before {
   border: 1px solid var(--border-color);
   padding: 24px;
   display: grid;
-  grid-template-columns: 2fr 2fr 1fr 2fr 1fr;
+  grid-template-columns: minmax(250px, 2fr) minmax(200px, 2fr) minmax(120px, 1fr) minmax(300px, 2fr) minmax(280px, auto);
   align-items: center;
   gap: 24px;
   transition: transform 0.3s ease, border-color 0.3s ease;
+  width: 100%;
+}
+
+@media (max-width: 1400px) {
+  .job-card {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas: 
+      "info status"
+      "path path"
+      "logs logs"
+      "actions actions";
+    gap: 16px;
+  }
+  
+  .job-info { grid-area: info; }
+  .job-status { grid-area: status; text-align: right; }
+  .job-path { grid-area: path; }
+  .job-recent-logs { grid-area: logs; }
+  .job-actions { grid-area: actions; justify-content: flex-start; }
 }
 
 .job-card:hover {
