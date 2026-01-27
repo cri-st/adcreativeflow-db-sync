@@ -20,7 +20,7 @@ export class BigQueryClient {
             iss: sa.client_email,
             sub: sa.client_email,
             aud: 'https://oauth2.googleapis.com/token',
-            scope: 'https://www.googleapis.com/auth/bigquery.readonly',
+            scope: 'https://www.googleapis.com/auth/bigquery',
         })
             .setProtectedHeader({ alg: 'RS256', kid: sa.private_key_id })
             .setIssuedAt(iat)
