@@ -50,23 +50,9 @@ const logFilters = document.querySelectorAll('.log-filter');
 const logDeletedBanner = document.getElementById('log-deleted-banner');
 const logErrorBanner = document.getElementById('log-error-banner');
 const logCompleteBanner = document.getElementById('log-complete-banner');
-    const container = document.getElementById('toast-container');
-    const icons = { error: '❌', success: '✅', warning: '⚠️' };
-    
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
-    toast.innerHTML = `
-        <span class="toast-icon">${icons[type] || icons.error}</span>
-        <span class="toast-message">${message}</span>
-        <button class="toast-close" onclick="this.parentElement.remove()">×</button>
-    `;
-    
-    container.appendChild(toast);
-    
-    setTimeout(() => {
-        toast.classList.add('toast-fade-out');
-        setTimeout(() => toast.remove(), 300);
-    }, duration);
+
+if (state.apiKey) {
+    showDashboard();
 }
 
 async function login() {
