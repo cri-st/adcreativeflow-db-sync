@@ -186,12 +186,12 @@ export class BigQueryClient {
         return data;
     }
 
-    async loadFromJson(projectId: string, datasetId: string, tableId: string, ndjson: string, append: boolean = true): Promise<any> {
+    async loadFromJson(projectId: string, datasetId: string, tableId: string, ndjson: string, append: boolean = true, schema?: { fields: any[] }): Promise<any> {
         const token = await this.getAccessToken();
         const url = `https://bigquery.googleapis.com/upload/bigquery/v2/projects/${projectId}/jobs?uploadType=multipart`;
         const boundary = 'XXXXXXXXXX';
 
-        const metadata = {
+        const metadata: any = {
             configuration: {
                 load: {
                     destinationTable: {
@@ -200,11 +200,17 @@ export class BigQueryClient {
                         tableId
                     },
                     sourceFormat: 'NEWLINE_DELIMITED_JSON',
-                    writeDisposition: append ? 'WRITE_APPEND' : 'WRITE_TRUNCATE',
-                    autodetect: true
+                    writeDisposition: append ? 'WRITE_APPEND' : 'WRITE_TRUNCATE'
                 }
             }
         };
+
+        if (schema) {
+            metadata.configuration.load.schema = schema;
+            metadata.configuration.load.autodetect = false;
+        } else {
+            metadata.configuration.load.autodetect = true;
+        }
 
         const body = `--${boundary}
 Content-Type: application/json; charset=UTF-8

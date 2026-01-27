@@ -117,6 +117,14 @@ export async function handleSheetsToBigQuerySync(
             const ndjson = ndjsonLines.join('\n');
             const writeDisposition = batchNumber === 1 ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
 
+            const schema = {
+                fields: headers.map(h => ({
+                    name: h,
+                    type: 'STRING',
+                    mode: 'NULLABLE'
+                }))
+            };
+
             logger.info('BQ_LOAD', `Loading ${rowCount} rows to BigQuery`, { writeDisposition });
             
             await bq.loadFromJson(
@@ -124,7 +132,8 @@ export async function handleSheetsToBigQuerySync(
                 job.bigquery.datasetId,
                 job.bigquery.tableId,
                 ndjson,
-                writeDisposition === 'WRITE_APPEND'
+                writeDisposition === 'WRITE_APPEND',
+                schema
             );
 
             rowsProcessedInBatch = rowCount;
