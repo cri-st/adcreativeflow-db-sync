@@ -325,7 +325,7 @@ async function saveJob(e) {
 
         const sheetName = document.getElementById('sheet-name').value;
         if (!sheetName) {
-            showToast('Please select a valid Sheet Name from the whitelist');
+            showToast('Please enter a valid Target Table Name');
             return;
         }
 
