@@ -144,16 +144,20 @@
                             <div class="form-group">
                                 <label>Spreadsheet URL</label>
                                 <input type="text" id="sheet-url" class="input-field" placeholder="https://docs.google.com/spreadsheets/d/...">
-                                <button type="button" id="test-sheet-btn" class="btn btn-test">TEST CONNECTION</button>
                             </div>
                             <div class="form-group">
-                                <label>Target Table Name</label>
-                                <input type="text" id="sheet-name" class="input-field" placeholder="shm_au_dimension_meta">
+                                <label>Sheet Tab Name (Source)</label>
+                                <input type="text" id="sheet-tab-name" class="input-field" placeholder="Sheet1">
+                                <button type="button" id="test-sheet-btn" class="btn btn-test">TEST CONNECTION</button>
                             </div>
                         </div>
 
                         <div class="section-column">
                             <p class="mono uppercase" style="font-size: 0.75rem; color: var(--accent-color); margin-bottom: 20px;">[ Target: BigQuery ]</p>
+                            <div class="form-group">
+                                <label>Target Table Name</label>
+                                <input type="text" id="sheet-table-name" class="input-field" placeholder="shm_au_dimension_meta">
+                            </div>
                             <div class="form-group">
                                 <label>Project ID</label>
                                 <input type="text" id="sheet-bq-project" class="input-field" value="acf-prod">

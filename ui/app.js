@@ -252,10 +252,10 @@ function extractSpreadsheetId(url) {
 
 async function testSheetConnection() {
     const url = document.getElementById('sheet-url').value;
-    const name = document.getElementById('sheet-name').value;
+    const name = document.getElementById('sheet-tab-name').value;
     
     if (!url || !name) {
-        showToast('Spreadsheet URL and Sheet Name are required');
+        showToast('Spreadsheet URL and Sheet Tab Name are required');
         return;
     }
 
@@ -323,25 +323,31 @@ async function saveJob(e) {
             return;
         }
 
-        const sheetName = document.getElementById('sheet-name').value;
-        if (!sheetName) {
-            showToast('Please enter a valid Target Table Name');
+        const tabName = document.getElementById('sheet-tab-name').value;
+        if (!tabName) {
+            showToast('Please enter the Sheet Tab Name (Source)');
+            return;
+        }
+
+        const tableName = document.getElementById('sheet-table-name').value;
+        if (!tableName) {
+            showToast('Please enter the Target Table Name');
             return;
         }
 
         job.sheets = {
             spreadsheetUrl: url,
             spreadsheetId: spreadsheetId,
-            sheetName: sheetName,
+            range: tabName,
+            sheetName: tabName,
             projectId: document.getElementById('sheet-bq-project').value,
             datasetId: document.getElementById('sheet-bq-dataset').value || undefined,
             append: document.getElementById('sheet-append').checked
         };
-        // For compatibility with BigQuery load logic if needed
         job.bigquery = {
             projectId: job.sheets.projectId,
             datasetId: job.sheets.datasetId || 'auto',
-            tableId: job.sheets.sheetName
+            tableId: tableName
         };
     } else {
         job.bigquery = {
@@ -487,7 +493,8 @@ function editJob(id) {
         sheetsSection.classList.add('active');
         
         document.getElementById('sheet-url').value = job.sheets.spreadsheetUrl;
-        document.getElementById('sheet-name').value = job.sheets.sheetName;
+        document.getElementById('sheet-tab-name').value = job.sheets.range || job.sheets.sheetName;
+        document.getElementById('sheet-table-name').value = job.bigquery.tableId;
         document.getElementById('sheet-bq-project').value = job.sheets.projectId;
         document.getElementById('sheet-bq-dataset').value = job.sheets.datasetId || '';
         document.getElementById('sheet-append').checked = job.sheets.append;
