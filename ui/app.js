@@ -356,9 +356,19 @@ async function runAllSyncs() {
     }
 
     showToast(`Initiating ${enabledJobs.length} sync jobs`, 'success');
-    enabledJobs.forEach(job => {
-        syncJob(job.id);
-    });
+
+    // Sort jobs: Sheets -> BigQuery first, then BQ -> Supabase
+    // This ensures data flows in the correct dependency order
+    const sheetsJobs = enabledJobs.filter(j => j.type === 'sheets-to-bq');
+    const bqJobs = enabledJobs.filter(j => !j.type || j.type === 'bq-to-supabase');
+
+    const orderedJobs = [...sheetsJobs, ...bqJobs];
+
+    // Execute strictly sequentially to respect dependencies
+    // Sheets needs to finish writing to BQ before BQ sends to Supabase
+    for (const job of orderedJobs) {
+        await syncJob(job.id);
+    }
 }
 
 async function saveJob(e) {
