@@ -265,11 +265,12 @@ async function runJobWithAutoContinuation(
 				id: sheetJob.id,
 				name: sheetJob.name,
 				enabled: sheetJob.enabled,
-				source: {
+				type: 'sheets-to-bq',
+				sheets: {
 					spreadsheetId: sheetJob.sheets.spreadsheetId,
-					sheetName: actualSheetName
+					range: actualSheetName
 				},
-				destination: {
+				bigquery: {
 					projectId: sheetJob.bigquery.projectId,
 					datasetId: sheetJob.bigquery.datasetId,
 					tableId: sheetJob.bigquery.tableId
