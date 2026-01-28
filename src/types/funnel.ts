@@ -63,6 +63,7 @@ export interface SheetsSyncConfig {
     sheets: {
         spreadsheetId: string;
         range: string;
+        append?: boolean;
     };
 
     bigquery: {

@@ -268,7 +268,8 @@ async function runJobWithAutoContinuation(
 				type: 'sheets-to-bq',
 				sheets: {
 					spreadsheetId: sheetJob.sheets.spreadsheetId,
-					range: actualSheetName
+					range: actualSheetName,
+					append: sheetJob.sheets.append
 				},
 				bigquery: {
 					projectId: sheetJob.bigquery.projectId,

@@ -115,7 +115,10 @@ export async function handleSheetsToBigQuerySync(
             });
 
             const ndjson = ndjsonLines.join('\n');
-            const writeDisposition = batchNumber === 1 ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
+            const shouldPreserveExistingData = job.sheets.append === true;
+            const isFirstBatchOfNewSync = batchNumber === 1;
+            const shouldTruncate = isFirstBatchOfNewSync && !shouldPreserveExistingData;
+            const writeDisposition = shouldTruncate ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
 
             const schema = {
                 fields: headers.map(h => ({
@@ -125,7 +128,11 @@ export async function handleSheetsToBigQuerySync(
                 }))
             };
 
-            logger.info('BQ_LOAD', `Loading ${rowCount} rows to BigQuery`, { writeDisposition });
+            logger.info('BQ_LOAD', `Loading ${rowCount} rows to BigQuery`, { 
+                writeDisposition,
+                shouldPreserveExistingData,
+                batchNumber 
+            });
             
             await bq.loadFromJson(
                 job.bigquery.projectId,
