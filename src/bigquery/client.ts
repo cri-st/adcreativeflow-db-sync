@@ -209,7 +209,10 @@ export class BigQueryClient {
             metadata.configuration.load.schema = schema;
             metadata.configuration.load.autodetect = false;
         } else {
-            metadata.configuration.load.autodetect = true;
+            // When schema is not provided (schema evolution mode), disable autodetect
+            // to prevent BigQuery from inferring types. This ensures the existing
+            // table schema is respected and new columns are added as STRING.
+            metadata.configuration.load.autodetect = false;
         }
 
         const body = `--${boundary}
