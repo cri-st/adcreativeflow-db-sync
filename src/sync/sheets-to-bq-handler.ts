@@ -9,6 +9,7 @@ interface SheetsSyncState {
     totalRows: number;
     headers: string[];
     startTime: number;
+    tableExists?: boolean;
 }
 
 function sanitizeColumnName(name: string): string {
@@ -55,6 +56,8 @@ export async function handleSheetsToBigQuerySync(
 
         const sheetName = job.sheets.range;
 
+        let tableExists = false;
+
         if (batchNumber === 1) {
             logger.info('SYNC_START', 'Starting Sheets to BigQuery sync', { 
                 source: job.sheets, 
@@ -71,16 +74,30 @@ export async function handleSheetsToBigQuerySync(
             headers = headerRows[0].map(h => sanitizeColumnName(h.toString()));
             logger.info('HEADERS', 'Headers found', { count: headers.length, headers });
 
+            try {
+                await bq.getTableMetadata(job.bigquery.projectId, job.bigquery.datasetId, job.bigquery.tableId);
+                tableExists = true;
+                logger.info('TABLE_CHECK', 'Table exists, will use schema evolution');
+            } catch (err: any) {
+                if (err.message?.includes('Not found')) {
+                    tableExists = false;
+                    logger.info('TABLE_CHECK', 'Table does not exist, will create with schema');
+                } else {
+                    throw err;
+                }
+            }
+
             await kvNamespace.put(stateKey, JSON.stringify({
                 lastProcessedRow: 1,
                 totalRows: 0,
                 headers,
-                startTime
+                startTime,
+                tableExists
             }), { expirationTtl: 86400 });
 
         } else {
             logger.info('BATCH_START', `Starting batch ${batchNumber}`);
-            const state = await kvNamespace.get<SheetsSyncState>(stateKey, 'json');
+            const state = await kvNamespace.get<SheetsSyncState & { tableExists: boolean }>(stateKey, 'json');
             
             if (!state) {
                 throw new Error(`Sync state not found for runId ${runId} (batch ${batchNumber}). The run may have expired.`);
@@ -90,6 +107,7 @@ export async function handleSheetsToBigQuerySync(
             headers = state.headers;
             startTime = state.startTime;
             totalRows = state.totalRows;
+            tableExists = state.tableExists ?? false;
         }
 
         const BATCH_SIZE = 5000;
@@ -120,17 +138,22 @@ export async function handleSheetsToBigQuerySync(
             const shouldTruncate = isFirstBatchOfNewSync && !shouldPreserveExistingData;
             const writeDisposition = shouldTruncate ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
 
-            const schema = {
+            const isNewTable = isFirstBatchOfNewSync && !tableExists;
+            const shouldProvideSchema = isNewTable;
+
+            const schema = shouldProvideSchema ? {
                 fields: headers.map(h => ({
                     name: h,
                     type: 'STRING',
                     mode: 'NULLABLE'
                 }))
-            };
+            } : undefined;
 
             logger.info('BQ_LOAD', `Loading ${rowCount} rows to BigQuery`, { 
                 writeDisposition,
                 shouldPreserveExistingData,
+                isNewTable,
+                shouldProvideSchema,
                 batchNumber 
             });
             
