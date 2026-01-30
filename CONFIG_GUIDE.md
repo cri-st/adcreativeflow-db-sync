@@ -101,8 +101,29 @@ Una vez compartido el Sheet:
 2.  Haz clic en el botón **"Add Sheets Sync Job"** (azul).
 3.  Copia la **URL completa** de tu Google Sheet y pégala en el campo "Spreadsheet URL".
 4.  El sistema extraerá automáticamente el ID de la hoja.
-5.  Selecciona el nombre de la tabla destino (debe estar en la whitelist, ej: `shm_au_dimension_meta`).
-6.  Haz clic en **"Test Connection"**.
+5.  Completa los campos requeridos:
+    - **Sheet Tab Name**: Nombre exacto de la pestaña en tu Google Sheet.
+    - **Target Table Name**: Nombre de la tabla en BigQuery.
+    - **Project ID**: Tu proyecto de GCP.
+    - **Dataset ID**: El dataset donde se creará la tabla.
+6.  **Opción "Append Data (vs Truncate)"**:
+    - **Desmarcado (default)**: Cada sync reemplaza todos los datos de la tabla.
+    - **Marcado**: Los datos nuevos se agregan a los existentes. Útil para:
+        - Acumular datos históricos.
+        - Preservar columnas eliminadas del Sheet (la data histórica se mantiene).
+        - Permitir schema evolution (nuevas columnas se agregan automáticamente).
+7.  Haz clic en **"Test Connection"**.
     *   Si compartiste correctamente la hoja, verás un mensaje verde: `✅ Connection Successful: Sheet is accessible`.
-7.  Guarda el job y ejecútalo manualmente ("RUN") para probar.
+8.  Guarda el job y ejecútalo manualmente ("RUN") para probar.
+
+### D. Comportamiento del Schema (Schema Evolution)
+
+El sistema maneja automáticamente los cambios en la estructura de tu Sheet:
+
+- **Primera ejecución**: Se crea la tabla en BigQuery con todas las columnas del Sheet.
+- **Nuevas columnas en el Sheet**: Se agregan automáticamente a la tabla existente.
+- **Columnas eliminadas del Sheet**: Se mantienen en la tabla de BigQuery con sus datos históricos. Los nuevos registros tendrán `NULL` en esas columnas.
+- **Columnas renombradas**: Se tratan como columnas nuevas (la columna antigua se mantiene con sus datos).
+
+**Nota**: Si necesitas eliminar columnas de la tabla en BigQuery, debes hacerlo manualmente desde la consola de BigQuery.
 

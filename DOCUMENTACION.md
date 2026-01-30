@@ -210,9 +210,16 @@ A diferencia de la sincronización BQ->Supabase, este flujo es **Unidireccional*
 3.  **Carga a BigQuery (Load Job)**:
     -   Transforma los datos a formato **NDJSON** (Newline Delimited JSON) en memoria.
     -   Utiliza la API de Jobs de BigQuery (`uploadType=multipart`) para una carga eficiente.
-    -   **Primer Lote**: Utiliza `WRITE_TRUNCATE` para limpiar la tabla destino y reemplazarla completamente.
-    -   **Lotes Siguientes**: Utiliza `WRITE_APPEND` para agregar el resto de los datos.
-    -   **Schema Autodetect**: Delega a BigQuery la inferencia de tipos de datos (STRING, INTEGER, FLOAT, BOOLEAN).
+    -   **Detección de Tabla Existente**: Antes del primer lote, verifica si la tabla destino ya existe en BigQuery.
+    -   **Modo Append vs Truncate**:
+        -   Si `append: true`: Siempre usa `WRITE_APPEND` (preserva datos existentes y agrega nuevos).
+        -   Si `append: false` (default): El primer lote usa `WRITE_TRUNCATE` (limpia la tabla), los siguientes usan `WRITE_APPEND`.
+    -   **Evolución de Schema (Schema Evolution)**:
+        -   Si la tabla **no existe**: Se crea con el schema del Sheet (todas las columnas como STRING).
+        -   Si la tabla **ya existe**: No se proporciona schema, permitiendo que BigQuery haga evolución automática:
+            -   **Nuevas columnas en Sheet**: Se agregan automáticamente a la tabla.
+            -   **Columnas eliminadas en Sheet**: Se mantienen en la tabla con sus datos históricos; los nuevos inserts tendrán NULL en esas columnas.
+            -   **Columnas renombradas**: Se tratan como columnas nuevas.
 
 ### 🛡️ Configuración y Permisos
 
@@ -238,7 +245,8 @@ Los jobs de este tipo se distinguen por el campo `type: "sheets-to-bq"`.
     "sheetName": "Sheet1",            // Nombre exacto de la pestaña
     "projectId": "mi-proyecto-gcp",
     "datasetId": "raw_data",
-    "append": false                   // false = Reemplazar tabla (recomendado)
+    "append": false                   // false = Reemplazar tabla (default)
+                                       // true = Agregar a datos existentes (preserva historial)
   },
   "bigquery": {
     "projectId": "mi-proyecto-gcp",
@@ -247,3 +255,12 @@ Los jobs de este tipo se distinguen por el campo `type: "sheets-to-bq"`.
   }
 }
 ```
+
+#### Opciones de Configuración Importantes
+
+- **`append`** (boolean, default: `false`):
+  - **`false`**: Cada sync reemplaza completamente los datos de la tabla (útil para datos que cambian completamente).
+  - **`true`**: Los datos nuevos se agregan a los existentes. Ideal para:
+    - Acumular datos históricos (ej: logs, métricas diarias).
+    - Preservar columnas eliminadas del Sheet (la data histórica se mantiene).
+    - Schema evolution: nuevas columnas en el Sheet se agregan automáticamente.
