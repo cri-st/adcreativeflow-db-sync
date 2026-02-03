@@ -10,6 +10,7 @@ interface SheetsSyncState {
     headers: string[];
     startTime: number;
     tableExists?: boolean;
+    tableSchema?: string[];
 }
 
 function sanitizeColumnName(name: string): string {
@@ -23,10 +24,13 @@ function cleanValue(val: any): any {
     if (val === undefined || val === '') return null;
     
     if (typeof val === 'string') {
-        const cleaned = val.replace(/[$,\s]/g, '');
-        if (!isNaN(Number(cleaned)) && cleaned !== '') {
-            return val;
-        }
+        // Escape special JSON characters to prevent malformed JSON
+        return val
+            .replace(/\\/g, '\\\\')  // Escape backslashes first
+            .replace(/"/g, '\\"')      // Escape double quotes
+            .replace(/\n/g, '\\n')      // Escape newlines
+            .replace(/\r/g, '\\r')      // Escape carriage returns
+            .replace(/\t/g, '\\t');     // Escape tabs
     }
     return val;
 }
@@ -57,6 +61,7 @@ export async function handleSheetsToBigQuerySync(
         const sheetName = job.sheets.range;
 
         let tableExists = false;
+        let tableSchema: string[] | undefined;
 
         if (batchNumber === 1) {
             logger.info('SYNC_START', 'Starting Sheets to BigQuery sync', { 
@@ -75,9 +80,13 @@ export async function handleSheetsToBigQuerySync(
             logger.info('HEADERS', 'Headers found', { count: headers.length, headers });
 
             try {
-                await bq.getTableMetadata(job.bigquery.projectId, job.bigquery.datasetId, job.bigquery.tableId);
+                const metadata = await bq.getTableMetadata(job.bigquery.projectId, job.bigquery.datasetId, job.bigquery.tableId);
                 tableExists = true;
-                logger.info('TABLE_CHECK', 'Table exists, will use schema evolution');
+                tableSchema = metadata.schema?.fields?.map((f: any) => f.name) || [];
+                logger.info('TABLE_CHECK', 'Table exists, will use schema evolution', { 
+                    tableColumns: tableSchema.length,
+                    sheetColumns: headers.length 
+                });
             } catch (err: any) {
                 if (err.message?.includes('Not found')) {
                     tableExists = false;
@@ -92,7 +101,8 @@ export async function handleSheetsToBigQuerySync(
                 totalRows: 0,
                 headers,
                 startTime,
-                tableExists
+                tableExists,
+                tableSchema
             }), { expirationTtl: 86400 });
 
         } else {
@@ -108,6 +118,7 @@ export async function handleSheetsToBigQuerySync(
             startTime = state.startTime;
             totalRows = state.totalRows;
             tableExists = state.tableExists ?? false;
+            tableSchema = state.tableSchema;
         }
 
         const BATCH_SIZE = 5000;
@@ -123,22 +134,39 @@ export async function handleSheetsToBigQuerySync(
         let rowsProcessedInBatch = 0;
 
         if (rowCount > 0) {
+            const shouldPreserveExistingData = job.sheets.append === true;
+            const isFirstBatchOfNewSync = batchNumber === 1;
+            const shouldTruncate = isFirstBatchOfNewSync && !shouldPreserveExistingData;
+            const writeDisposition = shouldTruncate ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
+            const isNewTable = isFirstBatchOfNewSync && !tableExists;
+            
+            // When table exists, only include columns that exist in the table
+            // This prevents errors when Sheet has columns not in the table
+            const effectiveHeaders = (!isNewTable && tableSchema) 
+                ? headers.filter(h => tableSchema!.includes(h))
+                : headers;
+            
+            if (!isNewTable && tableSchema) {
+                const excludedColumns = headers.filter(h => !tableSchema.includes(h));
+                if (excludedColumns.length > 0) {
+                    logger.info('SCHEMA_FILTER', 'Excluding columns not in table', { 
+                        excluded: excludedColumns,
+                        included: effectiveHeaders 
+                    });
+                }
+            }
+            
             const ndjsonLines = rows.map(row => {
                 const obj: any = {};
-                headers.forEach((header, index) => {
-                    const val = row[index];
-                    obj[header] = (val === undefined || val === '') ? null : val;
+                effectiveHeaders.forEach((header) => {
+                    const originalIndex = headers.indexOf(header);
+                    const val = row[originalIndex];
+                    obj[header] = (val === undefined || val === '') ? null : cleanValue(val);
                 });
                 return JSON.stringify(obj);
             });
 
             const ndjson = ndjsonLines.join('\n');
-            const shouldPreserveExistingData = job.sheets.append === true;
-            const isFirstBatchOfNewSync = batchNumber === 1;
-            const shouldTruncate = isFirstBatchOfNewSync && !shouldPreserveExistingData;
-            const writeDisposition = shouldTruncate ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
-
-            const isNewTable = isFirstBatchOfNewSync && !tableExists;
             const shouldProvideSchema = isNewTable;
 
             const schema = shouldProvideSchema ? {
@@ -154,6 +182,7 @@ export async function handleSheetsToBigQuerySync(
                 shouldPreserveExistingData,
                 isNewTable,
                 shouldProvideSchema,
+                effectiveColumns: effectiveHeaders.length,
                 batchNumber 
             });
             
@@ -178,7 +207,9 @@ export async function handleSheetsToBigQuerySync(
                 lastProcessedRow: nextStartRow - 1,
                 totalRows,
                 headers,
-                startTime
+                startTime,
+                tableExists,
+                tableSchema
             }), { expirationTtl: 86400 });
             
             logger.success('BATCH_COMPLETE', `Batch ${batchNumber} complete`, { 
