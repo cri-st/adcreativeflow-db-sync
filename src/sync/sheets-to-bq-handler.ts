@@ -84,7 +84,7 @@ export async function handleSheetsToBigQuerySync(
                 tableExists = true;
                 tableSchema = metadata.schema?.fields?.map((f: any) => f.name) || [];
                 logger.info('TABLE_CHECK', 'Table exists, will use schema evolution', { 
-                    tableColumns: tableSchema.length,
+                    tableColumns: tableSchema!.length,
                     sheetColumns: headers.length 
                 });
             } catch (err: any) {
@@ -140,18 +140,29 @@ export async function handleSheetsToBigQuerySync(
             const writeDisposition = shouldTruncate ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
             const isNewTable = isFirstBatchOfNewSync && !tableExists;
             
-            // When table exists, only include columns that exist in the table
-            // This prevents errors when Sheet has columns not in the table
-            const effectiveHeaders = (!isNewTable && tableSchema) 
-                ? headers.filter(h => tableSchema!.includes(h))
-                : headers;
+            let effectiveHeaders = headers;
             
             if (!isNewTable && tableSchema) {
-                const excludedColumns = headers.filter(h => !tableSchema.includes(h));
-                if (excludedColumns.length > 0) {
-                    logger.info('SCHEMA_FILTER', 'Excluding columns not in table', { 
-                        excluded: excludedColumns,
-                        included: effectiveHeaders 
+                const newColumns = headers.filter(h => !tableSchema!.includes(h));
+                
+                if (newColumns.length > 0) {
+                    logger.info('SCHEMA_UPDATE', 'Detected new columns in Sheet, updating BigQuery schema', {
+                        newColumns,
+                        existingColumns: tableSchema.length,
+                        totalColumns: headers.length
+                    });
+                    
+                    await bq.updateTableSchema(
+                        job.bigquery.projectId,
+                        job.bigquery.datasetId,
+                        job.bigquery.tableId,
+                        newColumns
+                    );
+                    
+                    tableSchema = [...tableSchema, ...newColumns];
+                    
+                    logger.success('SCHEMA_UPDATE', 'BigQuery schema updated successfully', {
+                        addedColumns: newColumns.length
                     });
                 }
             }

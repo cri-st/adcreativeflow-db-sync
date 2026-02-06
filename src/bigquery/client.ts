@@ -186,6 +186,49 @@ export class BigQueryClient {
         return data;
     }
 
+    async updateTableSchema(
+        projectId: string, 
+        datasetId: string, 
+        tableId: string, 
+        newColumns: string[]
+    ): Promise<void> {
+        if (newColumns.length === 0) return;
+
+        const token = await this.getAccessToken();
+        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`;
+
+        // First, get current schema
+        const currentMetadata = await this.getTableMetadata(projectId, datasetId, tableId);
+        const currentFields = currentMetadata.schema?.fields || [];
+
+        // Add new columns as STRING type (nullable)
+        const newFields = newColumns.map(col => ({
+            name: col,
+            type: 'STRING',
+            mode: 'NULLABLE'
+        }));
+
+        const updatedSchema = {
+            fields: [...currentFields, ...newFields]
+        };
+
+        const response = await fetch(url, {
+            method: 'PATCH',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                schema: updatedSchema
+            }),
+        });
+
+        const data: any = await response.json();
+        if (data.error) {
+            throw new Error(`BigQuery Schema Update Error: ${data.error.message}`);
+        }
+    }
+
     async loadFromJson(projectId: string, datasetId: string, tableId: string, ndjson: string, append: boolean = true, schema?: { fields: any[] }): Promise<any> {
         const token = await this.getAccessToken();
         const url = `https://bigquery.googleapis.com/upload/bigquery/v2/projects/${projectId}/jobs?uploadType=multipart`;
