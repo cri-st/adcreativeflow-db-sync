@@ -16,22 +16,25 @@ interface SheetsSyncState {
 function sanitizeColumnName(name: string): string {
     return name
         .trim()
-        .replace(/[^a-zA-Z0-9_]/g, '_')
-        .replace(/^{0-9}/, '_$&');
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '_')
+        .replace(/^[0-9]/, '_$&');
 }
 
 function cleanValue(val: any): any {
     if (val === undefined || val === '') return null;
+    return val;
+}
+
+function convertTimestampToBigQueryFormat(val: string): string | null {
+    if (!val || val === '') return null;
     
-    if (typeof val === 'string') {
-        // Escape special JSON characters to prevent malformed JSON
-        return val
-            .replace(/\\/g, '\\\\')  // Escape backslashes first
-            .replace(/"/g, '\\"')      // Escape double quotes
-            .replace(/\n/g, '\\n')      // Escape newlines
-            .replace(/\r/g, '\\r')      // Escape carriage returns
-            .replace(/\t/g, '\\t');     // Escape tabs
+    const isoMatch = val.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:[+-]\d{2}:?\d{2})?$/);
+    if (isoMatch) {
+        const [, year, month, day, hour, minute, second] = isoMatch;
+        return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
     }
+    
     return val;
 }
 
@@ -85,7 +88,9 @@ export async function handleSheetsToBigQuerySync(
                 tableSchema = metadata.schema?.fields?.map((f: any) => f.name) || [];
                 logger.info('TABLE_CHECK', 'Table exists, will use schema evolution', { 
                     tableColumns: tableSchema!.length,
-                    sheetColumns: headers.length 
+                    sheetColumns: headers.length,
+                    tableSchema: tableSchema,
+                    sheetHeaders: headers
                 });
             } catch (err: any) {
                 if (err.message?.includes('Not found')) {
@@ -143,7 +148,15 @@ export async function handleSheetsToBigQuerySync(
             let effectiveHeaders = headers;
             
             if (!isNewTable && tableSchema) {
-                const newColumns = headers.filter(h => !tableSchema!.includes(h));
+                const tableSchemaLower = tableSchema.map(s => s.toLowerCase());
+                const newColumns = headers.filter(h => !tableSchemaLower.includes(h.toLowerCase()));
+                
+                logger.info('SCHEMA_COMPARE', 'Comparing Sheet headers with BigQuery schema', {
+                    sheetHeaders: headers,
+                    tableSchema: tableSchema,
+                    tableSchemaLower: tableSchemaLower,
+                    newColumnsDetected: newColumns
+                });
                 
                 if (newColumns.length > 0) {
                     logger.info('SCHEMA_UPDATE', 'Detected new columns in Sheet, updating BigQuery schema', {
@@ -172,12 +185,35 @@ export async function handleSheetsToBigQuerySync(
                 effectiveHeaders.forEach((header) => {
                     const originalIndex = headers.indexOf(header);
                     const val = row[originalIndex];
-                    obj[header] = (val === undefined || val === '') ? null : cleanValue(val);
+                    let cleanVal = (val === undefined || val === '') ? null : cleanValue(val);
+                    
+                    if (typeof cleanVal === 'string' && (header.includes('time') || header.includes('date'))) {
+                        cleanVal = convertTimestampToBigQueryFormat(cleanVal);
+                    }
+                    
+                    if (!isNewTable && tableSchema) {
+                        const bqColumnName = tableSchema.find(s => s.toLowerCase() === header.toLowerCase());
+                        if (bqColumnName) {
+                            obj[bqColumnName] = cleanVal;
+                        } else {
+                            obj[header] = cleanVal;
+                        }
+                    } else {
+                        obj[header] = cleanVal;
+                    }
                 });
                 return JSON.stringify(obj);
             });
 
             const ndjson = ndjsonLines.join('\n');
+            
+            if (ndjsonLines.length > 0) {
+                logger.info('NDJSON_SAMPLE', 'First row of NDJSON data', { 
+                    sample: ndjsonLines[0],
+                    totalRows: ndjsonLines.length
+                });
+            }
+            
             const shouldProvideSchema = isNewTable;
 
             const schema = shouldProvideSchema ? {

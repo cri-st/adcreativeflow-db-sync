@@ -84,7 +84,7 @@ export class BigQueryClient {
 
     async query<T>(projectId: string, sql: string, forceStringFields?: string[]): Promise<T[]> {
         const token = await this.getAccessToken();
-        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/queries`;
+        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(projectId)}/queries`;
 
         const response = await fetch(url, {
             method: 'POST',
@@ -108,7 +108,7 @@ export class BigQueryClient {
 
     async queryPaginated<T>(projectId: string, sql: string, forceStringFields?: string[]): Promise<T[]> {
         const token = await this.getAccessToken();
-        const baseUrl = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/queries`;
+        const baseUrl = `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(projectId)}/queries`;
 
         const initialResponse = await fetch(baseUrl, {
             method: 'POST',
@@ -145,7 +145,7 @@ export class BigQueryClient {
 
         while (pageToken && pageToken !== '') {
             pageNumber++;
-            const pageUrl = `${baseUrl}/${jobId}?pageToken=${encodeURIComponent(pageToken)}&maxResults=5000`;
+            const pageUrl = `${baseUrl}/${encodeURIComponent(jobId)}?pageToken=${encodeURIComponent(pageToken)}&maxResults=5000`;
 
             const pageResponse = await fetch(pageUrl, {
                 headers: {
@@ -170,13 +170,34 @@ export class BigQueryClient {
 
     async getTableMetadata(projectId: string, datasetId: string, tableId: string): Promise<any> {
         const token = await this.getAccessToken();
-        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`;
+        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(datasetId)}/tables/${encodeURIComponent(tableId)}`;
 
         const response = await fetch(url, {
             headers: {
                 Authorization: `Bearer ${token}`,
             },
         });
+
+        if (!response.ok) {
+            const statusCode = response.status;
+            let errorMessage: string;
+            
+            try {
+                const errorData: any = await response.json();
+                errorMessage = errorData.error?.message || `HTTP ${statusCode}: ${response.statusText}`;
+            } catch {
+                errorMessage = `HTTP ${statusCode}: ${response.statusText}`;
+            }
+            
+            throw new Error(`BigQuery Metadata Error: ${errorMessage}`);
+        }
+
+        const contentType = response.headers.get('content-type');
+        const contentLength = response.headers.get('content-length');
+        
+        if (contentLength === '0' || !contentType?.includes('application/json')) {
+            throw new Error('BigQuery Metadata Error: Empty or invalid response from API');
+        }
 
         const data: any = await response.json();
         if (data.error) {
@@ -195,7 +216,7 @@ export class BigQueryClient {
         if (newColumns.length === 0) return;
 
         const token = await this.getAccessToken();
-        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`;
+        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(datasetId)}/tables/${encodeURIComponent(tableId)}`;
 
         // First, get current schema
         const currentMetadata = await this.getTableMetadata(projectId, datasetId, tableId);
@@ -231,7 +252,7 @@ export class BigQueryClient {
 
     async loadFromJson(projectId: string, datasetId: string, tableId: string, ndjson: string, append: boolean = true, schema?: { fields: any[] }): Promise<any> {
         const token = await this.getAccessToken();
-        const url = `https://bigquery.googleapis.com/upload/bigquery/v2/projects/${projectId}/jobs?uploadType=multipart`;
+        const url = `https://bigquery.googleapis.com/upload/bigquery/v2/projects/${encodeURIComponent(projectId)}/jobs?uploadType=multipart`;
         const boundary = 'XXXXXXXXXX';
 
         const metadata: any = {
@@ -250,11 +271,6 @@ export class BigQueryClient {
 
         if (schema) {
             metadata.configuration.load.schema = schema;
-            metadata.configuration.load.autodetect = false;
-        } else {
-            // When schema is not provided (schema evolution mode), disable autodetect
-            // to prevent BigQuery from inferring types. This ensures the existing
-            // table schema is respected and new columns are added as STRING.
             metadata.configuration.load.autodetect = false;
         }
 
@@ -290,7 +306,7 @@ ${ndjson}
 
     private async pollJob(projectId: string, jobId: string): Promise<any> {
         const token = await this.getAccessToken();
-        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/jobs/${jobId}`;
+        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}`;
 
         while (true) {
             const response = await fetch(url, {
@@ -298,9 +314,13 @@ ${ndjson}
             });
             const data: any = await response.json();
 
-            if (data.status.state === 'DONE') {
+            if (data.status?.state === 'DONE') {
                 if (data.status.errorResult) {
-                    throw new Error(`BigQuery Job Failed: ${data.status.errorResult.message}`);
+                    const errorDetails = data.status.errors?.map((e: any) => e.message).join('; ') || '';
+                    const fullMessage = errorDetails 
+                        ? `${data.status.errorResult.message}. Details: ${errorDetails}`
+                        : data.status.errorResult.message;
+                    throw new Error(`BigQuery Job Failed: ${fullMessage}`);
                 }
                 return data;
             }
