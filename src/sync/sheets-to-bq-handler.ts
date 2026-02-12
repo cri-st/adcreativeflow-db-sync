@@ -38,6 +38,63 @@ function convertTimestampToBigQueryFormat(val: string): string | null {
     return val;
 }
 
+function inferBigQueryType(values: any[]): string {
+    let hasFloat = false;
+    let hasInteger = true;
+    let hasDate = false;
+    let hasTimestamp = false;
+    
+    for (const val of values) {
+        if (val === null || val === undefined || val === '') continue;
+        
+        const strVal = String(val).trim();
+        if (strVal === '') continue;
+        
+        if (/^\d{4}-\d{2}-\d{2}$/.test(strVal)) {
+            hasDate = true;
+            continue;
+        }
+        
+        if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/.test(strVal)) {
+            hasTimestamp = true;
+            continue;
+        }
+        
+        if (/^-?\d+\.\d+$/.test(strVal)) {
+            hasFloat = true;
+            hasInteger = false;
+            continue;
+        }
+        
+        if (/^-?\d+$/.test(strVal)) {
+            continue;
+        }
+        
+        return 'STRING';
+    }
+    
+    if (hasTimestamp) return 'TIMESTAMP';
+    if (hasDate) return 'DATE';
+    if (hasFloat) return 'FLOAT';
+    if (hasInteger) return 'INTEGER';
+    return 'STRING';
+}
+
+function generateSchemaFromData(headers: string[], rows: any[][]): { fields: { name: string; type: string; mode: string }[] } {
+    const fields = headers.map((header, colIndex) => {
+        const columnValues = rows.map(row => row[colIndex]).filter(v => v !== undefined && v !== null && v !== '');
+        const bqType = inferBigQueryType(columnValues);
+        
+        return {
+            name: header,
+            type: bqType,
+            mode: 'NULLABLE'
+        };
+    });
+    
+    return { fields };
+}
+
 export async function handleSheetsToBigQuerySync(
     auth: GlobalAuth,
     job: SheetsSyncConfig,
@@ -216,13 +273,13 @@ export async function handleSheetsToBigQuerySync(
             
             const shouldProvideSchema = isNewTable;
 
-            const schema = shouldProvideSchema ? {
-                fields: headers.map(h => ({
-                    name: h,
-                    type: 'STRING',
-                    mode: 'NULLABLE'
-                }))
-            } : undefined;
+            let schema: { fields: { name: string; type: string; mode: string }[] } | undefined;
+            if (shouldProvideSchema) {
+                schema = generateSchemaFromData(headers, rows);
+                logger.info('SCHEMA_INFERENCE', 'Inferred BigQuery schema from data', {
+                    fields: schema.fields.map(f => ({ name: f.name, type: f.type }))
+                });
+            }
 
             logger.info('BQ_LOAD', `Loading ${rowCount} rows to BigQuery`, { 
                 writeDisposition,
