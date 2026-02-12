@@ -173,6 +173,11 @@ export async function handleSync(
             logger.info('SCHEMA_SYNC', 'Fetching BigQuery metadata', { table: bqJob.bigquery.tableOrView });
             const bqMetadata = await bq.getTableMetadata(bqJob.bigquery.projectId, bqJob.bigquery.datasetId, bqJob.bigquery.tableOrView);
             bqFields = bqMetadata.schema.fields;
+            
+            logger.info('SCHEMA_SYNC', 'BigQuery schema fetched', { 
+                fieldCount: bqFields.length,
+                fields: bqFields.map(f => ({ name: f.name, type: f.type }))
+            });
 
             logger.info('SCHEMA_SYNC', 'Ensuring Supabase table exists', { tableName: bqJob.supabase.tableName });
             const createSql = generateCreateTableSQL(bqJob.supabase.tableName, bqFields, bqJob.supabase.upsertColumns);
@@ -185,6 +190,15 @@ export async function handleSync(
 
             const supabaseSchema = await sb.getTableSchema(bqJob.supabase.tableName);
             const schemaChanges = detectSchemaChanges(bqFields, supabaseSchema);
+
+            logger.info('SCHEMA_SYNC', 'Schema comparison details', {
+                bqFieldsCount: bqFields.length,
+                bqFields: bqFields.map(f => f.name),
+                supabaseFieldsCount: supabaseSchema.length,
+                supabaseFields: supabaseSchema.map(f => f.name),
+                columnsToAdd: schemaChanges.columnsToAdd.map(c => c.name),
+                columnsToDrop: schemaChanges.columnsToDrop
+            });
 
             if (schemaChanges.columnsToAdd.length > 0) {
                 logger.success('SCHEMA_SYNC', 'Adding new columns', { count: schemaChanges.columnsToAdd.length, columns: schemaChanges.columnsToAdd.map(c => c.name) });
