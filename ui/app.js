@@ -16,6 +16,8 @@ const state = {
     lastLogCount: 0,
     stablePolls: 0,
     activeSyncs: new Map(),
+    cronSchedules: [],
+    selectedCronExpression: '0 */6 * * *',
 };
 
 const loginView = document.getElementById('login-view');
@@ -377,11 +379,19 @@ async function saveJob(e) {
     const type = jobTypeInput.value;
     const isNew = !id;
 
+    const cronSelect = document.getElementById('job-cron-schedule');
+    const cronCustom = document.getElementById('job-cron-custom');
+    let cronSchedule = cronSelect.value;
+    if (cronSchedule === 'custom') {
+        cronSchedule = cronCustom.value.trim() || '0 */6 * * *';
+    }
+
     let job = {
         id: id || undefined,
         name: document.getElementById('job-name').value,
         enabled: document.getElementById('job-enabled').checked,
-        type: type
+        type: type,
+        cronSchedule: cronSchedule
     };
 
     if (type === 'sheets-to-bq') {
@@ -563,6 +573,20 @@ function editJob(id) {
     document.getElementById('job-id').value = job.id;
     document.getElementById('job-name').value = job.name;
     document.getElementById('job-enabled').checked = job.enabled;
+
+    const cronSchedule = job.cronSchedule || '0 */6 * * *';
+    const cronSelect = document.getElementById('job-cron-schedule');
+    const cronCustom = document.getElementById('job-cron-custom');
+    
+    const presetValues = Array.from(cronSelect.options).map(o => o.value);
+    if (presetValues.includes(cronSchedule)) {
+        cronSelect.value = cronSchedule;
+        cronCustom.classList.add('hidden');
+    } else {
+        cronSelect.value = 'custom';
+        cronCustom.value = cronSchedule;
+        cronCustom.classList.remove('hidden');
+    }
 
     if (type === 'sheets-to-bq') {
         bqSection.classList.remove('active');
@@ -1036,3 +1060,199 @@ logEntries.addEventListener('scroll', () => {
     const isAtBottom = logEntries.scrollHeight - logEntries.clientHeight <= logEntries.scrollTop + 50;
     state.isAutoScrollEnabled = isAtBottom;
 });
+
+const CRON_PRESETS = [
+    { id: 'default', name: 'Every 6 Hours', expression: '0 */6 * * *', description: 'Runs at minute 0 of every 6th hour' },
+    { id: 'hourly', name: 'Hourly', expression: '0 * * * *', description: 'Runs at the start of every hour' },
+    { id: 'daily', name: 'Daily (Midnight)', expression: '0 0 * * *', description: 'Runs every day at midnight UTC' },
+    { id: 'daily-morning', name: 'Daily (8 AM)', expression: '0 8 * * *', description: 'Runs every day at 8:00 AM UTC' },
+    { id: 'twice-daily', name: 'Twice Daily', expression: '0 0,12 * * *', description: 'Runs at midnight and noon UTC' },
+    { id: 'weekly', name: 'Weekly (Monday)', expression: '0 0 * * 1', description: 'Runs every Monday at midnight UTC' },
+    { id: '30min', name: 'Every 30 Minutes', expression: '*/30 * * * *', description: 'Runs every 30 minutes' },
+    { id: '15min', name: 'Every 15 Minutes', expression: '*/15 * * * *', description: 'Runs every 15 minutes' },
+];
+
+function renderCronPresets() {
+    const grid = document.getElementById('preset-grid');
+    if (!grid) return;
+
+    grid.innerHTML = CRON_PRESETS.map(preset => `
+        <div class="preset-card ${state.selectedCronExpression === preset.expression ? 'selected' : ''}" 
+             data-expression="${preset.expression}"
+             onclick="selectCronPreset('${preset.expression}')">
+            <div class="preset-name">${preset.name}</div>
+            <div class="preset-expression">${preset.expression}</div>
+            <div class="preset-description">${preset.description}</div>
+        </div>
+    `).join('');
+}
+
+function selectCronPreset(expression) {
+    state.selectedCronExpression = expression;
+    document.getElementById('custom-cron-input').value = expression;
+    renderCronPresets();
+    validateCronExpression();
+}
+
+async function validateCronExpression() {
+    const input = document.getElementById('custom-cron-input');
+    const resultEl = document.getElementById('cron-validation-result');
+    const expression = input.value.trim();
+
+    if (!expression) {
+        resultEl.textContent = '';
+        resultEl.className = 'mono';
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/cron/validate', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${state.apiKey}`
+            },
+            body: JSON.stringify({ expression })
+        });
+
+        const data = await res.json();
+
+        if (data.valid) {
+            resultEl.textContent = `✓ ${data.description}`;
+            resultEl.className = 'mono cron-validation-success';
+        } else {
+            resultEl.textContent = '✗ Invalid cron expression';
+            resultEl.className = 'mono cron-validation-error';
+        }
+    } catch (err) {
+        resultEl.textContent = '⚠ Validation failed';
+        resultEl.className = 'mono cron-validation-error';
+    }
+}
+
+function renderCronJobAssignments() {
+    const container = document.getElementById('cron-job-list');
+    if (!container) return;
+
+    if (state.jobs.length === 0) {
+        container.innerHTML = '<p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">No jobs configured</p>';
+        return;
+    }
+
+    container.innerHTML = state.jobs.map(job => {
+        const currentSchedule = job.cronSchedule || '0 */6 * * *';
+        const preset = CRON_PRESETS.find(p => p.expression === currentSchedule);
+        const displayText = preset ? preset.name : currentSchedule;
+
+        return `
+            <div class="cron-job-item">
+                <div class="job-info">
+                    <div class="job-name">${job.name}</div>
+                    <div class="job-type">${(job.type || 'bq-to-supabase').replace(/-/g, ' ')}</div>
+                </div>
+                <div class="job-schedule">
+                    <span class="schedule-display">${displayText}</span>
+                    <select onchange="updateJobCronSchedule('${job.id}', this.value)">
+                        ${CRON_PRESETS.map(p => `
+                            <option value="${p.expression}" ${currentSchedule === p.expression ? 'selected' : ''}>
+                                ${p.name}
+                            </option>
+                        `).join('')}
+                        <option value="custom" ${!CRON_PRESETS.some(p => p.expression === currentSchedule) ? 'selected' : ''}>
+                            Custom
+                        </option>
+                    </select>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function updateJobCronSchedule(jobId, expression) {
+    const job = state.jobs.find(j => j.id === jobId);
+    if (!job) return;
+
+    if (expression === 'custom') {
+        const customExpression = prompt('Enter custom cron expression (e.g., 0 */6 * * *):', job.cronSchedule || '0 */6 * * *');
+        if (!customExpression) return;
+        expression = customExpression;
+    }
+
+    try {
+        const res = await fetch(`/api/configs/${jobId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${state.apiKey}`
+            },
+            body: JSON.stringify({ ...job, cronSchedule: expression })
+        });
+
+        if (res.ok) {
+            job.cronSchedule = expression;
+            renderCronJobAssignments();
+            showToast(`Schedule updated for ${job.name}`, 'success');
+        } else {
+            throw new Error('Failed to update schedule');
+        }
+    } catch (err) {
+        showToast('Failed to update schedule');
+    }
+}
+
+async function loadCronSchedules() {
+    try {
+        const res = await fetch('/api/cron/schedules', {
+            headers: { 'Authorization': `Bearer ${state.apiKey}` }
+        });
+
+        if (res.ok) {
+            state.cronSchedules = await res.json();
+        }
+    } catch (err) {
+        console.error('Failed to load cron schedules:', err);
+    }
+}
+
+const validateCronBtn = document.getElementById('validate-cron-btn');
+const customCronInput = document.getElementById('custom-cron-input');
+
+if (validateCronBtn) {
+    validateCronBtn.addEventListener('click', validateCronExpression);
+}
+
+if (customCronInput) {
+    customCronInput.addEventListener('input', () => {
+        state.selectedCronExpression = customCronInput.value.trim();
+        renderCronPresets();
+    });
+    customCronInput.addEventListener('blur', validateCronExpression);
+}
+
+const jobCronSchedule = document.getElementById('job-cron-schedule');
+const jobCronCustom = document.getElementById('job-cron-custom');
+
+if (jobCronSchedule) {
+    jobCronSchedule.addEventListener('change', () => {
+        if (jobCronSchedule.value === 'custom') {
+            jobCronCustom.classList.remove('hidden');
+            jobCronCustom.focus();
+        } else {
+            jobCronCustom.classList.add('hidden');
+        }
+    });
+}
+
+const originalShowDashboard = showDashboard;
+showDashboard = async function() {
+    await originalShowDashboard();
+    await loadCronSchedules();
+    renderCronPresets();
+    renderCronJobAssignments();
+};
+
+const originalRenderJobs = renderJobs;
+renderJobs = function() {
+    originalRenderJobs();
+    renderCronJobAssignments();
+};

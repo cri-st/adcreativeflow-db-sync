@@ -62,11 +62,15 @@
             <div class="tabs-container">
                 <button class="tab-btn active" data-tab="sheets">
                     <span class="tab-icon">📊</span>
-                    SHEETS &rarr; BIGQUERY
+                    SHEETS → BIGQUERY
                 </button>
                 <button class="tab-btn" data-tab="bq">
                     <span class="tab-icon">⚡</span>
-                    BIGQUERY &rarr; SUPABASE
+                    BIGQUERY → SUPABASE
+                </button>
+                <button class="tab-btn" data-tab="cron">
+                    <span class="tab-icon">⏰</span>
+                    CRON SCHEDULES
                 </button>
             </div>
 
@@ -89,6 +93,49 @@
                 </div>
                 <div class="jobs-list" id="bq-jobs-container">
                     <p class="mono" style="color: var(--text-secondary); text-align: center; padding: 20px;">SCANNING...</p>
+                </div>
+            </div>
+
+            <div id="tab-cron" class="tab-content">
+                <div class="cron-section">
+                    <div class="cron-header">
+                        <h3 class="uppercase">Cron Schedule Configuration</h3>
+                        <p class="mono" style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 8px;">
+                            Configure when jobs run automatically. Each job can have its own schedule or use the default.
+                        </p>
+                    </div>
+                    
+                    <div class="cron-presets" id="cron-presets">
+                        <h4 class="uppercase" style="margin-bottom: 16px;">Quick Presets</h4>
+                        <div class="preset-grid" id="preset-grid">
+                            <!-- Presets will be populated by JS -->
+                        </div>
+                    </div>
+
+                    <div class="cron-custom" style="margin-top: 32px;">
+                        <h4 class="uppercase" style="margin-bottom: 16px;">Custom Expression</h4>
+                        <div class="form-group">
+                            <label class="uppercase">Cron Expression</label>
+                            <div style="display: flex; gap: 12px;">
+                                <input type="text" id="custom-cron-input" class="input-field" placeholder="0 */6 * * *" style="flex: 1;">
+                                <button type="button" id="validate-cron-btn" class="btn btn-ghost">VALIDATE</button>
+                            </div>
+                            <p id="cron-validation-result" class="mono" style="font-size: 0.75rem; margin-top: 8px;"></p>
+                        </div>
+                        <div class="cron-help" style="margin-top: 16px; padding: 16px; background: rgba(0,0,0,0.3); border-radius: 8px;">
+                            <p class="mono" style="font-size: 0.7rem; color: var(--text-secondary);">
+                                FORMAT: minute hour day-of-month month day-of-week<br>
+                                EXAMPLES: <code>0 */6 * * *</code> (every 6 hours) | <code>0 8 * * *</code> (daily 8am UTC) | <code>*/30 * * * *</code> (every 30 min)
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="cron-job-assignments" style="margin-top: 32px;">
+                        <h4 class="uppercase" style="margin-bottom: 16px;">Job Schedules</h4>
+                        <div id="cron-job-list" class="cron-job-list">
+                            <!-- Job schedules will be populated by JS -->
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -190,6 +237,22 @@
                 </div>
 
                 <div class="form-group" style="margin-top: 24px; border-top: 1px solid var(--border-color); padding-top: 24px;">
+                    <label class="uppercase">Cron Schedule</label>
+                    <select id="job-cron-schedule" class="input-field">
+                        <option value="0 */6 * * *">Every 6 Hours (Default)</option>
+                        <option value="0 * * * *">Hourly</option>
+                        <option value="0 0 * * *">Daily (Midnight UTC)</option>
+                        <option value="0 8 * * *">Daily (8 AM UTC)</option>
+                        <option value="0 0,12 * * *">Twice Daily</option>
+                        <option value="0 0 * * 1">Weekly (Monday)</option>
+                        <option value="*/30 * * * *">Every 30 Minutes</option>
+                        <option value="*/15 * * * *">Every 15 Minutes</option>
+                        <option value="custom">Custom...</option>
+                    </select>
+                    <input type="text" id="job-cron-custom" class="input-field hidden" placeholder="0 */6 * * *" style="margin-top: 8px;">
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
                     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                         <input type="checkbox" id="job-enabled" checked style="accent-color: var(--accent-color);">
                         <span class="uppercase">Enable Auto-Sync</span>

@@ -52,6 +52,7 @@ export interface BigQuerySyncConfig {
     lastStatus?: 'success' | 'error';
     lastError?: string;
     lastSummary?: string;
+    cronSchedule?: string;
 }
 
 export interface SheetsSyncConfig {
@@ -77,6 +78,7 @@ export interface SheetsSyncConfig {
     lastStatus?: 'success' | 'error';
     lastError?: string;
     lastSummary?: string;
+    cronSchedule?: string;
 }
 
 export type SyncJobConfig = BigQuerySyncConfig | SheetsSyncConfig;

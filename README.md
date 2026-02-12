@@ -91,3 +91,85 @@ Content-Type: application/json
 ```bash
 npm run deploy
 ```
+
+## Cron Schedule Configuration
+
+Each sync job can have its own cron schedule. The system supports flexible scheduling with a queue-based execution model.
+
+### Available Presets
+
+- **Every 6 Hours** (default): `0 */6 * * *`
+- **Hourly**: `0 * * * *`
+- **Daily (Midnight)**: `0 0 * * *`
+- **Daily (8 AM UTC)**: `0 8 * * *`
+- **Twice Daily**: `0 0,12 * * *`
+- **Weekly (Monday)**: `0 0 * * 1`
+- **Every 30 Minutes**: `*/30 * * * *`
+- **Every 15 Minutes**: `*/15 * * * *`
+- **Custom**: Any valid cron expression
+
+### Queue-Based Execution
+
+Jobs are executed sequentially (one at a time) to respect Cloudflare Free Tier limits:
+
+1. **Sequential Processing**: Jobs run one after another, not in parallel
+2. **Smart Delays**: The system waits between jobs based on the previous job's duration
+3. **Error Handling**: If a job fails, the queue continues with the next job
+4. **State Tracking**: Queue state is persisted in KV for monitoring
+
+### Cloudflare Free Tier Limits
+
+| Resource | Free Tier Limit | Strategy |
+|----------|----------------|----------|
+| CPU Time | 50ms/request | Jobs run sequentially with delays |
+| KV Reads | 100,000/day | Minimal reads, batch operations |
+| KV Writes | 1,000/day | State updates only when necessary |
+| Cron Triggers | 3 triggers | 4 triggers configured (0, 15, 30, 45 min) |
+
+### API Endpoints
+
+#### Validate Cron Expression
+```http
+POST /api/cron/validate
+Authorization: Bearer YOUR_SYNC_API_KEY
+Content-Type: application/json
+
+{
+  "expression": "0 */6 * * *"
+}
+```
+
+#### Get Cron Schedules
+```http
+GET /api/cron/schedules
+Authorization: Bearer YOUR_SYNC_API_KEY
+```
+
+#### Update Cron Schedules
+```http
+POST /api/cron/schedules
+Authorization: Bearer YOUR_SYNC_API_KEY
+Content-Type: application/json
+
+[
+  {
+    "id": "custom",
+    "name": "My Schedule",
+    "expression": "0 */6 * * *",
+    "description": "Every 6 hours",
+    "enabled": true
+  }
+]
+```
+
+#### Get Queue Status
+```http
+GET /api/queue
+Authorization: Bearer YOUR_SYNC_API_KEY
+```
+
+#### Get Specific Queue
+```http
+GET /api/queue/{queueId}
+Authorization: Bearer YOUR_SYNC_API_KEY
+```

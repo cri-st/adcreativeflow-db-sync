@@ -1056,3 +1056,128 @@ body::before {
   line-height: 1.5;
   animation: slideUp 0.3s ease;
 }
+
+.cron-section {
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  padding: 24px;
+  border-radius: 8px;
+}
+
+.cron-header {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.preset-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-color);
+  padding: 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.preset-card:hover {
+  border-color: var(--accent-color);
+  background: var(--accent-dim);
+}
+
+.preset-card.selected {
+  border-color: var(--accent-color);
+  background: var(--accent-dim);
+  box-shadow: 0 0 0 1px var(--accent-color);
+}
+
+.preset-card .preset-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.preset-card .preset-expression {
+  font-family: var(--font-data);
+  font-size: 0.75rem;
+  color: var(--accent-color);
+  margin-bottom: 4px;
+}
+
+.preset-card .preset-description {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+}
+
+.cron-job-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cron-job-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.cron-job-item .job-info {
+  flex: 1;
+}
+
+.cron-job-item .job-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.cron-job-item .job-type {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.cron-job-item .job-schedule {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cron-job-item .schedule-display {
+  font-family: var(--font-data);
+  font-size: 0.75rem;
+  color: var(--accent-color);
+}
+
+.cron-job-item select {
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-family: var(--font-data);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.cron-job-item select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.cron-validation-success {
+  color: var(--success);
+}
+
+.cron-validation-error {
+  color: var(--error);
+}

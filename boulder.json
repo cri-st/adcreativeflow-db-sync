@@ -1,0 +1,22 @@
+{
+  "tasks": [
+    {
+      "id": "1",
+      "name": "Update BigQuery client maxResults",
+      "status": "completed",
+      "file": "src/bigquery/client.ts"
+    },
+    {
+      "id": "2",
+      "name": "Update UI to show log metadata",
+      "status": "completed",
+      "file": "ui/app.js"
+    },
+    {
+      "id": "3",
+      "name": "Enhance sync handler logging",
+      "status": "completed",
+      "file": "src/sync/handler.ts"
+    }
+  ]
+}

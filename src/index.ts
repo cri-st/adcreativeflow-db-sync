@@ -1,10 +1,26 @@
 import { Hono } from 'hono';
 import { BigQueryClient } from './bigquery/client';
-import { handleSync, SyncJobConfig, SyncResult } from './sync/handler';
+import { handleSync, SyncResult } from './sync/handler';
 import { handleSheetsToBigQuerySync } from './sync/sheets-to-bq-handler';
 import { SheetsClient } from './sheets/client';
-import { SHEETS_WHITELIST, SheetsSyncConfig } from './types/funnel';
+import { SyncJobConfig, SheetsSyncConfig } from './types/funnel';
 import { Logger } from './logger';
+import {
+	validateCronExpression,
+	getCronDescription,
+	filterJobsByCron,
+	createQueueState,
+	saveQueueState,
+	getQueueState,
+	updateJobInQueue,
+	completeQueue,
+	getCronSchedules,
+	saveCronSchedules,
+	delay,
+	DEFAULT_CRON_SCHEDULES,
+	CronSchedule,
+	QueueState
+} from './cron/queue';
 
 export interface Env {
 	GOOGLE_SERVICE_ACCOUNT_JSON: string;
@@ -226,6 +242,54 @@ app.get('/api/scheduled/sheets', async (c) => {
 	return c.json({ success: true, results });
 });
 
+app.get('/api/cron/schedules', async (c) => {
+	const schedules = await getCronSchedules(c.env.SYNC_CONFIGS);
+	return c.json(schedules);
+});
+
+app.post('/api/cron/schedules', async (c) => {
+	const schedules: CronSchedule[] = await c.req.json();
+
+	for (const schedule of schedules) {
+		if (!validateCronExpression(schedule.expression)) {
+			return c.json({ error: `Invalid cron expression: ${schedule.expression}` }, 400);
+		}
+	}
+
+	await saveCronSchedules(c.env.SYNC_CONFIGS, schedules);
+	return c.json({ success: true, schedules });
+});
+
+app.post('/api/cron/validate', async (c) => {
+	const { expression } = await c.req.json();
+	const isValid = validateCronExpression(expression);
+	return c.json({
+		valid: isValid,
+		expression,
+		description: isValid ? getCronDescription(expression) : 'Invalid expression'
+	});
+});
+
+app.get('/api/queue/:queueId', async (c) => {
+	const queueId = c.req.param('queueId');
+	const state = await getQueueState(c.env.SYNC_CONFIGS, queueId);
+	if (!state) {
+		return c.json({ error: 'Queue not found' }, 404);
+	}
+	return c.json(state);
+});
+
+app.get('/api/queue', async (c) => {
+	const list = await c.env.SYNC_CONFIGS.list({ prefix: 'queue:' });
+	const queues = await Promise.all(
+		list.keys.map(async (k) => {
+			const state = await c.env.SYNC_CONFIGS.get<QueueState>(k.name, 'json');
+			return { id: k.name.replace('queue:', ''), state };
+		})
+	);
+	return c.json(queues);
+});
+
 
 
 
@@ -336,25 +400,119 @@ async function runJobWithAutoContinuation(
 	}
 }
 
-export default {
-	fetch: app.fetch,
-	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-		const list = await env.SYNC_CONFIGS.list({ prefix: 'job:' });
-		const cron = event.cron;
+async function runJobsSequentially(
+	env: Env,
+	ctx: ExecutionContext,
+	jobs: SyncJobConfig[],
+	queueId: string
+): Promise<void> {
+	const logger = new Logger('queue', 'Job Queue', queueId);
 
-		for (const k of list.keys) {
-			const job = await env.SYNC_CONFIGS.get<SyncJobConfig>(k.name, 'json');
-			if (job && job.enabled) {
-				const isSheetsJob = job.type === 'sheets-to-bq';
-				
-				if (cron === "30 */6 * * *" && isSheetsJob) {
-					ctx.waitUntil(runJobWithAutoContinuation(env, job, ctx));
-				} else if (cron === "0 */6 * * *" && !isSheetsJob) {
-					ctx.waitUntil(runJobWithAutoContinuation(env, job, ctx));
-				} else if (!cron) {
-					ctx.waitUntil(runJobWithAutoContinuation(env, job, ctx));
+	try {
+		await logger.info('QUEUE_START', `Starting sequential execution of ${jobs.length} jobs`, {
+			queueId,
+			jobCount: jobs.length,
+			jobIds: jobs.map(j => j.id)
+		});
+
+		for (let i = 0; i < jobs.length; i++) {
+			const job = jobs[i];
+			const startTime = Date.now();
+
+			await updateJobInQueue(env.SYNC_CONFIGS, queueId, job.id, {
+				status: 'running',
+				startedAt: new Date().toISOString()
+			});
+
+			await logger.info('JOB_START', `Starting job ${i + 1}/${jobs.length}`, {
+				jobId: job.id,
+				jobName: job.name,
+				jobType: job.type || 'bq-to-supabase'
+			});
+
+			try {
+				await runJobWithAutoContinuation(env, job, ctx);
+
+				const duration = Date.now() - startTime;
+				await updateJobInQueue(env.SYNC_CONFIGS, queueId, job.id, {
+					status: 'completed',
+					completedAt: new Date().toISOString()
+				});
+
+				await logger.success('JOB_COMPLETE', `Job completed in ${duration}ms`, {
+					jobId: job.id,
+					durationMs: duration
+				});
+
+				if (i < jobs.length - 1) {
+					const nextJob = jobs[i + 1];
+					const delayMs = Math.max(5000, Math.min(30000, duration * 0.5));
+
+					await logger.info('QUEUE_DELAY', `Waiting ${delayMs}ms before next job`, {
+						nextJobId: nextJob.id,
+						delayMs
+					});
+
+					await delay(delayMs);
+				}
+
+			} catch (error: any) {
+				await updateJobInQueue(env.SYNC_CONFIGS, queueId, job.id, {
+					status: 'error',
+					completedAt: new Date().toISOString(),
+					error: error.message
+				});
+
+				await logger.error('JOB_ERROR', `Job failed: ${error.message}`, {
+					jobId: job.id,
+					error: error.message
+				});
+
+				if (i < jobs.length - 1) {
+					await logger.info('QUEUE_CONTINUE', 'Continuing with next job despite error');
+					await delay(5000);
 				}
 			}
 		}
+
+		await completeQueue(env.SYNC_CONFIGS, queueId);
+		await logger.success('QUEUE_COMPLETE', 'All jobs processed', {
+			totalJobs: jobs.length
+		});
+
+	} catch (error: any) {
+		await logger.error('QUEUE_ERROR', `Queue execution failed: ${error.message}`);
+		throw error;
+	}
+}
+
+export default {
+	fetch: app.fetch,
+	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+		const cron = event.cron;
+		const queueId = `cron-${cron?.replace(/\s+/g, '-') || 'manual'}-${Date.now()}`;
+
+		const list = await env.SYNC_CONFIGS.list({ prefix: 'job:' });
+		const allJobs: SyncJobConfig[] = [];
+
+		for (const k of list.keys) {
+			const job = await env.SYNC_CONFIGS.get<SyncJobConfig>(k.name, 'json');
+			if (job) allJobs.push(job);
+		}
+
+		const matchingJobs = filterJobsByCron(allJobs, cron || '0 */6 * * *');
+
+		if (matchingJobs.length === 0) {
+			console.log(`No jobs match cron expression: ${cron}`);
+			return;
+		}
+
+		const queueState = await createQueueState(
+			matchingJobs.map(j => j.id),
+			matchingJobs
+		);
+		await saveQueueState(env.SYNC_CONFIGS, queueId, queueState);
+
+		ctx.waitUntil(runJobsSequentially(env, ctx, matchingJobs, queueId));
 	}
 };
