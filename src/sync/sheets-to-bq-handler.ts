@@ -39,44 +39,57 @@ function convertTimestampToBigQueryFormat(val: string): string | null {
 }
 
 function inferBigQueryType(values: any[]): string {
-    let hasFloat = false;
-    let hasInteger = true;
-    let hasDate = false;
-    let hasTimestamp = false;
+    const SAMPLE_SIZE = 100;
+    const sample = values.slice(0, SAMPLE_SIZE);
     
-    for (const val of values) {
+    let totalNonEmpty = 0;
+    let floatCount = 0;
+    let integerCount = 0;
+    let dateCount = 0;
+    let timestampCount = 0;
+    let stringCount = 0;
+    
+    for (const val of sample) {
         if (val === null || val === undefined || val === '') continue;
         
         const strVal = String(val).trim();
         if (strVal === '') continue;
         
+        totalNonEmpty++;
+        
         if (/^\d{4}-\d{2}-\d{2}$/.test(strVal)) {
-            hasDate = true;
+            dateCount++;
             continue;
         }
         
         if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/.test(strVal)) {
-            hasTimestamp = true;
+            timestampCount++;
             continue;
         }
         
         if (/^-?\d+\.\d+$/.test(strVal)) {
-            hasFloat = true;
-            hasInteger = false;
+            floatCount++;
             continue;
         }
         
         if (/^-?\d+$/.test(strVal)) {
+            integerCount++;
             continue;
         }
         
-        return 'STRING';
+        stringCount++;
     }
     
-    if (hasTimestamp) return 'TIMESTAMP';
-    if (hasDate) return 'DATE';
-    if (hasFloat) return 'FLOAT';
-    if (hasInteger) return 'INTEGER';
+    if (totalNonEmpty === 0) return 'STRING';
+    
+    const threshold = totalNonEmpty * 0.8;
+    
+    if (timestampCount >= threshold) return 'TIMESTAMP';
+    if (dateCount >= threshold) return 'DATE';
+    if (floatCount >= threshold) return 'FLOAT';
+    if ((integerCount + floatCount) >= threshold) return 'FLOAT';
+    if (integerCount >= threshold) return 'INTEGER';
+    
     return 'STRING';
 }
 
