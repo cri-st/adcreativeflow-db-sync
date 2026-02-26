@@ -212,19 +212,35 @@ export async function handleSync(
                 await sb.executeRawSQL(dropSql);
             }
 
-            if (schemaChanges.columnsToAdd.length > 0 || schemaChanges.columnsToDrop.length > 0) {
+            const hasNewColumns = schemaChanges.columnsToAdd.length > 0;
+            const hasDroppedColumns = schemaChanges.columnsToDrop.length > 0;
+            
+            if (hasNewColumns || hasDroppedColumns) {
                 logger.info('SCHEMA_SYNC', 'Schema changes applied, waiting for propagation');
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
 
             logger.info('INCREMENTAL', 'Determining last sync date');
-            if (bqJob.bigquery.incrementalColumn) {
+            
+            const incrementalColumn = bqJob.bigquery.incrementalColumn;
+            const shouldUseIncremental = incrementalColumn && !hasNewColumns;
+            
+            if (hasNewColumns) {
+                logger.info('INCREMENTAL', 'New columns detected - forcing full sync to backfill data', {
+                    newColumns: schemaChanges.columnsToAdd.map(c => c.name)
+                });
+            }
+            
+            if (shouldUseIncremental && incrementalColumn) {
                 try {
-                    lastSyncDate = await sb.getLastSyncDateFromTable(bqJob.supabase.tableName, bqJob.bigquery.incrementalColumn);
+                    lastSyncDate = await sb.getLastSyncDateFromTable(bqJob.supabase.tableName, incrementalColumn);
                 } catch (e: any) {
                     logger.warning('INCREMENTAL', 'Could not fetch last sync date', { reason: e.message });
                 }
+            } else if (incrementalColumn) {
+                logger.info('INCREMENTAL', 'Performing full sync to populate new columns');
             }
+            
             logger.info('INCREMENTAL', 'Last sync date determined', { lastSyncDate: lastSyncDate || 'NONE' });
 
             await kvNamespace.put(stateKey, JSON.stringify({ 
