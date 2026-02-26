@@ -3,6 +3,7 @@ import { SheetsClient } from '../sheets/client';
 import { Logger, LogEntry } from '../logger';
 import { GlobalAuth, SyncResult } from './handler';
 import { SheetsSyncConfig } from '../types/funnel';
+import { convertTimestampToBigQueryFormat } from './timestamp-utils';
 
 interface SheetsSyncState {
     lastProcessedRow: number;
@@ -23,18 +24,6 @@ function sanitizeColumnName(name: string): string {
 
 function cleanValue(val: any): any {
     if (val === undefined || val === '') return null;
-    return val;
-}
-
-function convertTimestampToBigQueryFormat(val: string): string | null {
-    if (!val || val === '') return null;
-    
-    const isoMatch = val.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:[+-]\d{2}:?\d{2})?$/);
-    if (isoMatch) {
-        const [, year, month, day, hour, minute, second] = isoMatch;
-        return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
-    }
-    
     return val;
 }
 
