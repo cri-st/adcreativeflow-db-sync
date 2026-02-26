@@ -39,6 +39,8 @@ interface SyncState {
     startTime: number;
     schemaSyncDone?: boolean;
     lastCursor?: { [key: string]: any };
+    hasNewColumns?: boolean;
+    newColumnNames?: string[];
 }
 
 /**
@@ -166,6 +168,8 @@ export async function handleSync(
         let totalRows = 0;
         let startTime = Date.now();
         let loadedCursor: { [key: string]: any } | undefined = undefined;
+        let hasNewColumns = false;
+        let newColumnNames: string[] = [];
 
         if (batchNumber === 1) {
             logger.info('SYNC_START', 'Starting sync', { bigquery: bqJob.bigquery, supabase: bqJob.supabase });
@@ -212,7 +216,8 @@ export async function handleSync(
                 await sb.executeRawSQL(dropSql);
             }
 
-            const hasNewColumns = schemaChanges.columnsToAdd.length > 0;
+            hasNewColumns = schemaChanges.columnsToAdd.length > 0;
+            newColumnNames = schemaChanges.columnsToAdd.map((c: SchemaField) => c.name);
             const hasDroppedColumns = schemaChanges.columnsToDrop.length > 0;
             
             if (hasNewColumns || hasDroppedColumns) {
@@ -243,13 +248,15 @@ export async function handleSync(
             
             logger.info('INCREMENTAL', 'Last sync date determined', { lastSyncDate: lastSyncDate || 'NONE' });
 
-            await kvNamespace.put(stateKey, JSON.stringify({ 
-                lastSyncDate, 
+            await kvNamespace.put(stateKey, JSON.stringify({
+                lastSyncDate,
                 bqFields,
                 totalRows: 0,
                 startTime,
                 schemaSyncDone: true,
-                lastCursor: undefined
+                lastCursor: undefined,
+                hasNewColumns,
+                newColumnNames
             }), { expirationTtl: 86400 });
         
         } else {
@@ -266,6 +273,8 @@ export async function handleSync(
             totalRows = state.totalRows || 0;
             startTime = state.startTime || Date.now();
             loadedCursor = state.lastCursor;
+            hasNewColumns = state.hasNewColumns || false;
+            newColumnNames = state.newColumnNames || [];
         }
 
         let filter = '';
@@ -311,18 +320,47 @@ export async function handleSync(
             LIMIT ${BATCH_LIMIT}
         `;
 
-        logger.info('DATA_FETCH', `Fetching batch ${batchNumber}`, { limit: BATCH_LIMIT });
-        const data = await bq.queryPaginated<any>(bqJob.bigquery.projectId, sql, bqJob.bigquery.forceStringFields);
-        logger.success('DATA_FETCH', `Batch ${batchNumber} fetched`, { 
-            count: data.length,
-            batchLimit: BATCH_LIMIT,
-            hasMore: data.length === BATCH_LIMIT
+        logger.info('DATA_FETCH', `Fetching batch ${batchNumber}`, { 
+            limit: BATCH_LIMIT,
+            sql: sql.replace(/\s+/g, ' ').trim()
         });
+        const data = await bq.queryPaginated<any>(bqJob.bigquery.projectId, sql, bqJob.bigquery.forceStringFields);
+        
+        if (data.length > 0) {
+            const firstRow = data[0];
+            const lastRow = data[data.length - 1];
+            logger.success('DATA_FETCH', `Batch ${batchNumber} fetched`, { 
+                count: data.length,
+                batchLimit: BATCH_LIMIT,
+                hasMore: data.length === BATCH_LIMIT,
+                fieldsInFirstRow: Object.keys(firstRow),
+                sampleFirstRow: Object.fromEntries(
+                    Object.entries(firstRow).slice(0, 5).map(([k, v]) => [k, v])
+                ),
+                fieldsInLastRow: Object.keys(lastRow)
+            });
+        } else {
+            logger.success('DATA_FETCH', `Batch ${batchNumber} fetched - no data`, { 
+                count: 0
+            });
+        }
 
         if (data.length > 0) {
             const UPSERT_BATCH_SIZE = 2500;
             for (let j = 0; j < data.length; j += UPSERT_BATCH_SIZE) {
                 const upsertBatch = data.slice(j, j + UPSERT_BATCH_SIZE);
+                
+                if (hasNewColumns && upsertBatch.length > 0) {
+                    const sampleRow = upsertBatch[0];
+                    logger.info('UPSERT_NEW_COLUMNS', 'Checking new column values in batch', {
+                        newColumns: newColumnNames,
+                        valuesInFirstRow: Object.fromEntries(
+                            newColumnNames.map((col: string) => [col, sampleRow[col]])
+                        ),
+                        rowHasNewColumns: newColumnNames.every((col: string) => col in sampleRow)
+                    });
+                }
+                
                 logger.debug('UPSERT', `Upserting sub-batch ${Math.floor(j/UPSERT_BATCH_SIZE)+1}`, { count: upsertBatch.length });
                 await sb.upsertTableData(bqJob.supabase.tableName, upsertBatch, bqJob.supabase.upsertColumns.join(','));
             }
