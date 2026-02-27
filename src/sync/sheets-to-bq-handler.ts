@@ -3,7 +3,7 @@ import { SheetsClient } from '../sheets/client';
 import { Logger, LogEntry } from '../logger';
 import { GlobalAuth, SyncResult } from './handler';
 import { SheetsSyncConfig } from '../types/funnel';
-import { convertTimestampToBigQueryFormat } from './timestamp-utils';
+import { convertTimestampToBigQueryFormat, isTimestampColumn } from './timestamp-utils';
 
 interface SheetsSyncState {
     lastProcessedRow: number;
@@ -246,7 +246,7 @@ export async function handleSheetsToBigQuerySync(
                     const val = row[originalIndex];
                     let cleanVal = (val === undefined || val === '') ? null : cleanValue(val);
                     
-                    if (typeof cleanVal === 'string' && (header.includes('time') || header.includes('date'))) {
+                    if (typeof cleanVal === 'string' && isTimestampColumn(header)) {
                         cleanVal = convertTimestampToBigQueryFormat(cleanVal);
                     }
                     

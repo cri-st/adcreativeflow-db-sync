@@ -41,3 +41,19 @@ export function convertTimestampToBigQueryFormat(val: string): string | null {
     
     return val;
 }
+
+const TIMESTAMP_COLUMN_PATTERNS = [
+    'time',
+    'date',
+    'timestamp',
+    '_at',     // created_at, updated_at, deleted_at
+    'created',
+    'updated',
+    'deleted',
+    'modified'
+];
+
+export function isTimestampColumn(columnName: string): boolean {
+    const lowerName = columnName.toLowerCase();
+    return TIMESTAMP_COLUMN_PATTERNS.some(pattern => lowerName.includes(pattern));
+}
