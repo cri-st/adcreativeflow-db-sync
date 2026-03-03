@@ -247,7 +247,14 @@ export async function handleSheetsToBigQuerySync(
                     let cleanVal = (val === undefined || val === '') ? null : cleanValue(val);
                     
                     if (typeof cleanVal === 'string' && isTimestampColumn(header)) {
-                        cleanVal = convertTimestampToBigQueryFormat(cleanVal);
+                        const converted = convertTimestampToBigQueryFormat(cleanVal);
+                        if (converted !== cleanVal) {
+                            logger.debug('TIMESTAMP_CONVERT', `Converted timestamp in column ${header}`, {
+                                original: cleanVal,
+                                converted: converted
+                            });
+                        }
+                        cleanVal = converted;
                     }
                     
                     if (!isNewTable && tableSchema) {

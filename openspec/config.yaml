@@ -1,0 +1,33 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Cloudflare Workers, Hono, TypeScript, Vitest, Wrangler
+  Architecture: Serverless worker with KV-based config, cron scheduling, queue-based job execution
+  Data sources: Google BigQuery/Sheets → Supabase
+  Testing: Vitest framework
+  Formatting: Prettier (no ESLint)
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Identify affected modules (handlers, clients, cron, types)
+  specs:
+    - Use Given/When/Then format for scenarios
+    - Document API endpoints with request/response examples
+  design:
+    - Include sequence diagrams for sync flows
+    - Document KV key patterns (job:*, queue:*, cron:*)
+  tasks:
+    - Group tasks by phase (infrastructure, implementation, testing)
+    - Use hierarchical numbering (1.1, 1.2, etc.)
+    - Keep tasks small enough to complete in one session
+  apply:
+    - Follow existing Hono patterns with typed bindings
+    - Use Env interface for all bindings
+    - Load cloudflare-workers skill for Workers-specific patterns
+  verify:
+    - Run `npm test` for unit tests
+    - Run `npm run dev` to test cron triggers locally
+    - Compare implementation against every spec scenario
+  archive:
+    - Warn before merging destructive deletas
