@@ -239,17 +239,25 @@ export async function handleSheetsToBigQuerySync(
                 }
             }
             
-            const ndjsonLines = rows.map(row => {
+            const timestampColumnsFound: string[] = [];
+            
+            const ndjsonLines = rows.map((row, rowIdx) => {
                 const obj: any = {};
                 effectiveHeaders.forEach((header) => {
                     const originalIndex = headers.indexOf(header);
                     const val = row[originalIndex];
                     let cleanVal = (val === undefined || val === '') ? null : cleanValue(val);
                     
-                    if (typeof cleanVal === 'string' && isTimestampColumn(header)) {
+                    const isTsCol = typeof cleanVal === 'string' && isTimestampColumn(header);
+                    if (rowIdx === 0 && isTsCol) {
+                        timestampColumnsFound.push(`${header}:${cleanVal}`);
+                    }
+                    
+                    if (isTsCol) {
                         const converted = convertTimestampToBigQueryFormat(cleanVal);
                         if (converted !== cleanVal) {
-                            logger.debug('TIMESTAMP_CONVERT', `Converted timestamp in column ${header}`, {
+                            logger.info('TIMESTAMP_CONVERT', `Converting timestamp in column ${header}`, {
+                                rowIndex: rowIdx,
                                 original: cleanVal,
                                 converted: converted
                             });
@@ -271,6 +279,10 @@ export async function handleSheetsToBigQuerySync(
                 return JSON.stringify(obj);
             });
 
+            logger.info('TIMESTAMP_DETECTION', 'Timestamp columns detected with sample values', {
+                timestampColumns: timestampColumnsFound
+            });
+            
             const ndjson = ndjsonLines.join('\n');
             
             if (ndjsonLines.length > 0) {
