@@ -12,6 +12,7 @@ interface SheetsSyncState {
     startTime: number;
     tableExists?: boolean;
     tableSchema?: string[];
+    tableColumnTypes?: Record<string, string>;
 }
 
 function sanitizeColumnName(name: string): string {
@@ -124,6 +125,7 @@ export async function handleSheetsToBigQuerySync(
 
         let tableExists = false;
         let tableSchema: string[] | undefined;
+        let tableColumnTypes: Record<string, string> = {};
 
         if (batchNumber === 1) {
             logger.info('SYNC_START', 'Starting Sheets to BigQuery sync', { 
@@ -145,11 +147,16 @@ export async function handleSheetsToBigQuerySync(
                 const metadata = await bq.getTableMetadata(job.bigquery.projectId, job.bigquery.datasetId, job.bigquery.tableId);
                 tableExists = true;
                 tableSchema = metadata.schema?.fields?.map((f: any) => f.name) || [];
+                tableColumnTypes = {};
+                metadata.schema?.fields?.forEach((f: any) => {
+                    tableColumnTypes[f.name.toLowerCase()] = f.type;
+                });
                 logger.info('TABLE_CHECK', 'Table exists, will use schema evolution', { 
                     tableColumns: tableSchema!.length,
                     sheetColumns: headers.length,
                     tableSchema: tableSchema,
-                    sheetHeaders: headers
+                    sheetHeaders: headers,
+                    columnTypes: tableColumnTypes
                 });
             } catch (err: any) {
                 if (err.message?.includes('Not found')) {
@@ -166,12 +173,13 @@ export async function handleSheetsToBigQuerySync(
                 headers,
                 startTime,
                 tableExists,
-                tableSchema
+                tableSchema,
+                tableColumnTypes
             }), { expirationTtl: 86400 });
 
         } else {
             logger.info('BATCH_START', `Starting batch ${batchNumber}`);
-            const state = await kvNamespace.get<SheetsSyncState & { tableExists: boolean }>(stateKey, 'json');
+            const state = await kvNamespace.get<SheetsSyncState>(stateKey, 'json');
             
             if (!state) {
                 throw new Error(`Sync state not found for runId ${runId} (batch ${batchNumber}). The run may have expired.`);
@@ -183,6 +191,7 @@ export async function handleSheetsToBigQuerySync(
             totalRows = state.totalRows;
             tableExists = state.tableExists ?? false;
             tableSchema = state.tableSchema;
+            tableColumnTypes = state.tableColumnTypes || {};
         }
 
         const BATCH_SIZE = 5000;
@@ -255,26 +264,17 @@ export async function handleSheetsToBigQuerySync(
                     const isTsCol = valueIsString && headerIsTimestamp;
                     
                     if (rowIdx === 0) {
-                        timestampColumnsFound.push(`${header}:isTsCol=${isTsCol},val=${cleanVal}`);
+                        const bqType = tableColumnTypes[header.toLowerCase()] || 'UNKNOWN';
+                        timestampColumnsFound.push(`${header}:isTsCol=${isTsCol},bqType=${bqType},val=${cleanVal}`);
                     }
                     
                     if (isTsCol) {
-                        const converted = convertTimestampToBigQueryFormat(cleanVal as string);
+                        const bqType = tableColumnTypes[header.toLowerCase()];
+                        const converted = convertTimestampToBigQueryFormat(cleanVal as string, bqType);
                         if (converted !== cleanVal) {
                             logger.info('TIMESTAMP_CONVERT', `Converting timestamp in column ${header}`, {
                                 rowIndex: rowIdx,
-                                original: cleanVal,
-                                converted: converted
-                            });
-                        }
-                        cleanVal = converted;
-                    }
-                    
-                    if (isTsCol) {
-                        const converted = convertTimestampToBigQueryFormat(cleanVal as string);
-                        if (converted !== cleanVal) {
-                            logger.info('TIMESTAMP_CONVERT', `Converting timestamp in column ${header}`, {
-                                rowIndex: rowIdx,
+                                bqType: bqType,
                                 original: cleanVal,
                                 converted: converted
                             });

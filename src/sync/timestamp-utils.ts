@@ -13,42 +13,63 @@ export function formatBigQueryTimestamp(parts: { year: string; month: string; da
     return `${parts.year}-${parts.month}-${parts.day} ${paddedHour}:${paddedMinute}:${paddedSecond}`;
 }
 
-export function convertTimestampToBigQueryFormat(val: string): string | null {
+export function formatBigQueryDate(parts: { year: string; month: string; day: string }): string {
+    return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+export function convertTimestampToBigQueryFormat(val: string, targetType?: string): string | null {
     if (!val || val === '') return null;
     
     const trimmed = val.trim().replace(/\s+/g, ' ');
     
+    let year = '', month = '', day = '', hour = '00', minute = '00', second = '00';
+    let found = false;
+    
     const isoMatch = trimmed.match(TIMESTAMP_PATTERNS.iso8601);
     if (isoMatch) {
-        const [, year, month, day, hour, minute, second] = isoMatch;
-        return formatBigQueryTimestamp({ year, month, day, hour, minute, second });
+        [, year, month, day, hour, minute, second] = isoMatch;
+        found = true;
     }
     
-    const spaceMatch = trimmed.match(TIMESTAMP_PATTERNS.spaceSeparated);
-    if (spaceMatch) {
-        const [, year, month, day, hour, minute, second] = spaceMatch;
-        return formatBigQueryTimestamp({ year, month, day, hour, minute, second });
+    if (!found) {
+        const spaceMatch = trimmed.match(TIMESTAMP_PATTERNS.spaceSeparated);
+        if (spaceMatch) {
+            [, year, month, day, hour, minute, second] = spaceMatch;
+            found = true;
+        }
     }
     
-    const spaceMatchVariable = trimmed.match(TIMESTAMP_PATTERNS.spaceSeparatedVariableHour);
-    if (spaceMatchVariable) {
-        const [, year, month, day, hour, minute, second] = spaceMatchVariable;
-        return formatBigQueryTimestamp({ year, month, day, hour, minute, second });
+    if (!found) {
+        const spaceMatchVariable = trimmed.match(TIMESTAMP_PATTERNS.spaceSeparatedVariableHour);
+        if (spaceMatchVariable) {
+            [, year, month, day, hour, minute, second] = spaceMatchVariable;
+            found = true;
+        }
     }
     
-    const noSecondsMatch = trimmed.match(TIMESTAMP_PATTERNS.withoutSeconds);
-    if (noSecondsMatch) {
-        const [, year, month, day, hour, minute] = noSecondsMatch;
-        return formatBigQueryTimestamp({ year, month, day, hour, minute, second: '00' });
+    if (!found) {
+        const noSecondsMatch = trimmed.match(TIMESTAMP_PATTERNS.withoutSeconds);
+        if (noSecondsMatch) {
+            [, year, month, day, hour, minute] = noSecondsMatch;
+            found = true;
+        }
     }
 
-    const slashMatch = trimmed.match(TIMESTAMP_PATTERNS.slashFormat);
-    if (slashMatch) {
-        const [, year, month, day, hour, minute, second] = slashMatch;
-        return formatBigQueryTimestamp({ year, month, day, hour, minute, second });
+    if (!found) {
+        const slashMatch = trimmed.match(TIMESTAMP_PATTERNS.slashFormat);
+        if (slashMatch) {
+            [, year, month, day, hour, minute, second] = slashMatch;
+            found = true;
+        }
     }
     
-    return val;
+    if (!found) return val;
+    
+    if (targetType === 'DATE') {
+        return formatBigQueryDate({ year, month, day });
+    }
+    
+    return formatBigQueryTimestamp({ year, month, day, hour, minute, second });
 }
 
 const TIMESTAMP_COLUMN_PATTERNS = [
