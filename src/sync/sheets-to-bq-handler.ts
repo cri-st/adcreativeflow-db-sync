@@ -241,6 +241,8 @@ export async function handleSheetsToBigQuerySync(
             
             const timestampColumnsFound: string[] = [];
             
+            logger.info('DEBUG_TIMESTAMP', 'Starting timestamp conversion loop');
+            
             const ndjsonLines = rows.map((row, rowIdx) => {
                 const obj: any = {};
                 effectiveHeaders.forEach((header) => {
@@ -248,13 +250,28 @@ export async function handleSheetsToBigQuerySync(
                     const val = row[originalIndex];
                     let cleanVal = (val === undefined || val === '') ? null : cleanValue(val);
                     
-                    const isTsCol = typeof cleanVal === 'string' && isTimestampColumn(header);
-                    if (rowIdx === 0 && isTsCol) {
-                        timestampColumnsFound.push(`${header}:${cleanVal}`);
+                    const headerIsTimestamp = isTimestampColumn(header);
+                    const valueIsString = typeof cleanVal === 'string';
+                    const isTsCol = valueIsString && headerIsTimestamp;
+                    
+                    if (rowIdx === 0) {
+                        timestampColumnsFound.push(`${header}:isTsCol=${isTsCol},val=${cleanVal}`);
                     }
                     
                     if (isTsCol) {
-                        const converted = convertTimestampToBigQueryFormat(cleanVal);
+                        const converted = convertTimestampToBigQueryFormat(cleanVal as string);
+                        if (converted !== cleanVal) {
+                            logger.info('TIMESTAMP_CONVERT', `Converting timestamp in column ${header}`, {
+                                rowIndex: rowIdx,
+                                original: cleanVal,
+                                converted: converted
+                            });
+                        }
+                        cleanVal = converted;
+                    }
+                    
+                    if (isTsCol) {
+                        const converted = convertTimestampToBigQueryFormat(cleanVal as string);
                         if (converted !== cleanVal) {
                             logger.info('TIMESTAMP_CONVERT', `Converting timestamp in column ${header}`, {
                                 rowIndex: rowIdx,
