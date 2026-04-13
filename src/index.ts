@@ -404,7 +404,8 @@ async function runJobsSequentially(
 	env: Env,
 	ctx: ExecutionContext,
 	jobs: SyncJobConfig[],
-	queueId: string
+	queueId: string,
+	originUrl?: string
 ): Promise<void> {
 	const logger = new Logger('queue', 'Job Queue', queueId);
 
@@ -431,7 +432,7 @@ async function runJobsSequentially(
 			});
 
 			try {
-				await runJobWithAutoContinuation(env, job, ctx);
+				await runJobWithAutoContinuation(env, job, ctx, undefined, 1, originUrl);
 
 				const duration = Date.now() - startTime;
 				await updateJobInQueue(env.SYNC_CONFIGS, queueId, job.id, {
@@ -489,8 +490,15 @@ async function runJobsSequentially(
 export default {
 	fetch: app.fetch,
 	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-		const cron = event.cron;
-		const queueId = `cron-${cron?.replace(/\s+/g, '-') || 'manual'}-${Date.now()}`;
+		const scheduledTime = new Date(event.scheduledTime);
+		const queueId = `cron-${event.cron?.replace(/\s+/g, '-') || 'manual'}-${Date.now()}`;
+
+		let originUrl: string | undefined;
+		if (env.WORKER_URL) {
+			originUrl = env.WORKER_URL.replace(/\/$/, '');
+		} else {
+			console.warn('WORKER_URL env var is not set — batch continuation will be disabled for this scheduled run');
+		}
 
 		const list = await env.SYNC_CONFIGS.list({ prefix: 'job:' });
 		const allJobs: SyncJobConfig[] = [];
@@ -500,10 +508,10 @@ export default {
 			if (job) allJobs.push(job);
 		}
 
-		const matchingJobs = filterJobsByCron(allJobs, cron || '0 */6 * * *');
+		const matchingJobs = filterJobsByCron(allJobs, scheduledTime);
 
 		if (matchingJobs.length === 0) {
-			console.log(`No jobs match cron expression: ${cron}`);
+			console.log(`No jobs match scheduled time: ${scheduledTime.toISOString()}`);
 			return;
 		}
 
@@ -513,6 +521,6 @@ export default {
 		);
 		await saveQueueState(env.SYNC_CONFIGS, queueId, queueState);
 
-		ctx.waitUntil(runJobsSequentially(env, ctx, matchingJobs, queueId));
+		ctx.waitUntil(runJobsSequentially(env, ctx, matchingJobs, queueId, originUrl));
 	}
 };

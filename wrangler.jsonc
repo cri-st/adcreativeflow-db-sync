@@ -21,6 +21,20 @@
 			"45 * * * *"
 		]
 	},
+	/**
+	 * WORKER_URL must be set as a Wrangler secret (or .dev.vars for local dev)
+	 * so the scheduled handler can trigger batch continuation requests.
+	 *
+	 * Production:  wrangler secret put WORKER_URL
+	 * Value:       https://adcreativeflow-db-sync.<your-subdomain>.workers.dev
+	 *
+	 * Without this variable, scheduled runs will still execute but multi-batch
+	 * jobs will not continue past the first batch.
+	 */
+	"vars": {
+		// WORKER_URL is injected via `wrangler secret put WORKER_URL` — do NOT hard-code here.
+		// Declaring the key here documents the expected variable without storing the value in VCS.
+	},
 	"kv_namespaces": [
 		{
 			"binding": "SYNC_CONFIGS",
