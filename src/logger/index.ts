@@ -77,6 +77,20 @@ export class Logger {
     };
   }
 
+  private async maybeFlush(force = false): Promise<void> {
+    if (!this.kv || this.logs.length === 0) return;
+    // Flush every 5 entries so logs appear in the UI modal quickly
+    if (force || this.logs.length % 5 === 0) {
+      await this.kv.put(`logs:${this.jobId}:${this.runId}`, JSON.stringify(this.logs), { expirationTtl: 86400 });
+    }
+  }
+
+  async flushNow(): Promise<void> {
+    if (this.kv && this.logs.length > 0) {
+      await this.kv.put(`logs:${this.jobId}:${this.runId}`, JSON.stringify(this.logs), { expirationTtl: 86400 });
+    }
+  }
+
   private log(level: LogLevel, phase: string, message: string, metadata?: Record<string, unknown>): void {
     const entry = this.createEntry(level, phase, message, this.sanitize(metadata));
     const emoji = this.getLevelEmoji(entry.level);
@@ -84,6 +98,8 @@ export class Logger {
     if (this.logs.length < 500) {
       this.logs.push(entry);
     }
+    // Fire-and-forget flush so we don't block the sync pipeline
+    this.maybeFlush().catch(() => {});
   }
 
   info(phase: string, message: string, metadata?: Record<string, unknown>): void { this.log('INFO', phase, message, metadata); }
