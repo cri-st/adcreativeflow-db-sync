@@ -171,6 +171,16 @@ async function fetchJobs() {
     }
 }
 
+function isJobStalled(job) {
+    if (job.lastStatus !== 'running') return false;
+    // If it's actively syncing in this browser session, it's not stalled
+    if (state.activeSyncs.has(job.id)) return false;
+    if (!job.lastRun) return false;
+    const lastRunTime = new Date(job.lastRun).getTime();
+    const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+    return lastRunTime < tenMinutesAgo;
+}
+
 function renderMiniLogs(jobId) {
     const logs = state.jobLogs[jobId] || [];
     
@@ -238,6 +248,9 @@ function renderJobs() {
         const sourceName = isSheets ? 'Google Sheets' : job.bigquery.tableOrView;
         const targetName = isSheets ? job.bigquery.tableId : job.supabase.tableName;
         const isSyncing = state.activeSyncs.has(job.id);
+        const stalled = isJobStalled(job);
+        const displayStatus = isSyncing ? 'syncing' : (stalled ? 'stalled' : (job.lastStatus || 'pending'));
+        const statusLabel = isSyncing ? '<span class="spinner" style="margin-right: 8px;"></span>SYNCING' : (stalled ? 'STALLED' : (job.lastStatus ? job.lastStatus.toUpperCase() : 'PENDING'));
         
         return `
             <div class="job-card stagger-in ${isSyncing ? 'syncing' : ''}" id="card-${job.id}">
@@ -258,8 +271,8 @@ function renderJobs() {
                 </div>
                 
                 <div class="job-status">
-                    <div class="status-badge ${job.lastStatus || ''}" id="status-badge-${job.id}">
-                        ${isSyncing ? '<span class="spinner" style="margin-right: 8px;"></span>SYNCING' : (job.lastStatus ? job.lastStatus.toUpperCase() : 'PENDING')}
+                    <div class="status-badge ${displayStatus}" id="status-badge-${job.id}">
+                        ${statusLabel}
                     </div>
                     <div class="mono" style="font-size: 0.65rem; color: var(--text-secondary); margin-top: 4px;">
                         ${job.lastRun ? new Date(job.lastRun).toLocaleString() : 'NEVER RUN'}
@@ -480,12 +493,14 @@ async function saveJob(e) {
 async function syncJob(id) {
     if (state.activeSyncs.has(id)) return;
     
-    state.activeSyncs.set(id, { batchNumber: 1, runId: null });
+    let runId = crypto.randomUUID();
+    state.activeSyncs.set(id, { batchNumber: 1, runId });
     renderJobs();
 
     const job = state.jobs.find(j => j.id === id);
     let batchNumber = 1;
-    let runId = null;
+    let syncFailed = false;
+    let failureReason = '';
 
     const pollInterval = setInterval(async () => {
         const syncState = state.activeSyncs.get(id);
@@ -509,8 +524,22 @@ async function syncJob(id) {
             });
 
             if (!res.ok) {
-                const data = await res.json();
-                showToast(`Sync Failed: ${data.error}`);
+                let errorMessage = `HTTP ${res.status}`;
+                try {
+                    const ct = res.headers.get('content-type');
+                    if (ct && ct.includes('application/json')) {
+                        const data = await res.json();
+                        errorMessage = data.error || errorMessage;
+                    } else {
+                        const text = await res.text();
+                        errorMessage = text.substring(0, 200) || errorMessage;
+                    }
+                } catch (e) {
+                    // ignore parse errors
+                }
+                syncFailed = true;
+                failureReason = errorMessage;
+                showToast(`Sync Failed: ${errorMessage}`);
                 break;
             }
 
@@ -536,11 +565,35 @@ async function syncJob(id) {
         }
     } catch (err) {
         console.error(err);
+        syncFailed = true;
+        failureReason = 'Worker crashed — likely out of memory';
         showToast('Network Error during sync');
     } finally {
         clearInterval(pollInterval);
         state.activeSyncs.delete(id);
-        fetchJobs();
+
+        if (syncFailed) {
+            const job = state.jobs.find(j => j.id === id);
+            if (job) {
+                job.lastStatus = 'error';
+                job.lastError = failureReason;
+                renderJobs();
+                try {
+                    await fetch(`/api/configs/${id}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${state.apiKey}`
+                        },
+                        body: JSON.stringify(job)
+                    });
+                } catch {
+                    // Ignore
+                }
+            }
+        }
+
+        await fetchJobs();
     }
 }
 
