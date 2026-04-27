@@ -192,14 +192,19 @@ app.post('/api/sync/:id', async (c) => {
 	const runId = body.runId;
 	const batchNumber = body.batchNumber || 1;
 
+	console.log(`[API SYNC] Received request for job ${id}, batch ${batchNumber}, runId ${runId || 'new'}`);
+
 	const job = await c.env.SYNC_CONFIGS.get<SyncJobConfig>(`job:${id}`, 'json');
 	if (!job) return c.json({ error: 'Job not found' }, 404);
 
 	try {
-		const origin = new URL(c.req.url).origin;
-		const result = await runJobWithAutoContinuation(c.env, job, c.executionCtx, runId, batchNumber, origin);
+		// Frontend handles batch continuation manually; do NOT auto-continue from the endpoint
+		// to prevent duplicate concurrent batch processing which causes OOM
+		const result = await runJobWithAutoContinuation(c.env, job, c.executionCtx, runId, batchNumber, undefined);
+		console.log(`[API SYNC] Completed job ${id}, batch ${batchNumber}, hasMore=${result.hasMore}`);
 		return c.json({ success: true, ...result });
 	} catch (err: any) {
+		console.error(`[API SYNC] Failed job ${id}, batch ${batchNumber}:`, err.message);
 		return c.json({ error: err.message }, 500);
 	}
 });
@@ -207,13 +212,13 @@ app.post('/api/sync/:id', async (c) => {
 	app.post('/api/sync/all', async (c) => {
 	const list = await c.env.SYNC_CONFIGS.list({ prefix: 'job:' });
 	const results = [];
-	const origin = new URL(c.req.url).origin;
 
 	for (const k of list.keys) {
 		const job = await c.env.SYNC_CONFIGS.get<SyncJobConfig>(k.name, 'json');
 		if (job && job.enabled) {
 			try {
-				await runJobWithAutoContinuation(c.env, job, c.executionCtx, undefined, 1, origin);
+				// No auto-continuation from HTTP endpoints to avoid duplicate batch processing
+				await runJobWithAutoContinuation(c.env, job, c.executionCtx, undefined, 1, undefined);
 				results.push({ id: job.id, status: 'success' });
 			} catch (err: any) {
 				results.push({ id: job.id, status: 'error', message: err.message });
@@ -306,6 +311,13 @@ async function runJobWithAutoContinuation(
 	originUrl?: string
 ) {
 	const currentRunId = runId || crypto.randomUUID();
+
+	// CRITICAL: Save "running" state IMMEDIATELY before any work.
+	// If the Worker crashes (OOM), this is the only trace left.
+	job.lastRun = new Date().toISOString();
+	job.lastStatus = 'running';
+	delete job.lastError;
+	await env.SYNC_CONFIGS.put(`job:${job.id}`, JSON.stringify(job));
 
 	try {
 		if (!env.SUPABASE_URL) throw new Error('SUPABASE_URL is missing.');
